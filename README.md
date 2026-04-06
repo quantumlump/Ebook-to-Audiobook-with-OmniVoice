@@ -4,6 +4,8 @@ Turn your eBooks (epub, pdf, mobi, txt, html) into high-quality audiobooks using
 
 Built for [Pinokio](https://pinokio.computer/) - the easiest way to install and run AI applications locally.
 
+<img width="1464" height="1625" alt="image" src="https://github.com/user-attachments/assets/3f051597-c48d-4e4e-8745-6d4c67bb58fa" />
+
 ## Features
 * **Zero Calibre Dependency:** Natively extracts text from EPUB, PDF, MOBI, and more.
 * **Voice Cloning:** Upload a 15-second voice sample to narrate your entire book.
