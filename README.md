@@ -15,10 +15,9 @@ Built for [Pinokio](https://pinokio.computer/) - the easiest way to install and 
 
 ## How to Install
 1. Install [Pinokio](https://pinokio.computer/).
-2. Copy this URL:
-   `pinokio://download?uri=https://github.com/quantumlump/Ebook-to-Audiobook-with-OmniVoice`
-3. Paste it into your browser or the Pinokio address bar and click enter.
-3. Click **Download**, then click **Install**.
+2. Copy this text, paste it into your browser or the Pinokio address bar and click enter:
+   ```text
+   pinokio://download?uri=https://github.com/quantumlump/Ebook-to-Audiobook-with-OmniVoice
 
 ## Usage
 Once installed, click **Start** to open the Gradio Web UI. Use the provided reference voice or upload your own, upload one or more eBooks, and click "Start Processing". Your completed audiobooks will appear in the UI to download, and are also saved in the `Working_files/Book` folder.
