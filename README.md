@@ -18,4 +18,4 @@ Built for [Pinokio](https://pinokio.computer/) - the easiest way to install and 
 3. Click "Download", then click "Install".
 
 ## Usage
-Once installed, click **Start** to open the Gradio Web UI. Upload a reference voice, upload one or more eBooks, and click "Start Processing". Your completed audiobooks will appear in the UI to download, and are also saved in the `Working_files/Book` folder.
+Once installed, click **Start** to open the Gradio Web UI. Use the provided reference voice or upload your own, upload one or more eBooks, and click "Start Processing". Your completed audiobooks will appear in the UI to download, and are also saved in the `Working_files/Book` folder.
