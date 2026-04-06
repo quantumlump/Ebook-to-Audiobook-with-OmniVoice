@@ -1,4 +1,7 @@
 import os
+LOCAL_TEMP = os.path.join(os.getcwd(), "gradio_temp")
+os.makedirs(LOCAL_TEMP, exist_ok=True)
+os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
 import re
 import gc
 import time
@@ -493,9 +496,11 @@ def create_gradio_app():
     with gr.Blocks(theme=gr.themes.Ocean()) as app:
         gr.Markdown("# eBook to Audiobook with OmniVoice")
         ref_audio_input = gr.Audio(label="Upload Voice File (<15 sec) or Record", type="filepath", value=DEFAULT_REF_AUDIO_PATH)
-        gen_file_input = gr.Files(
+        gen_file_input = gr.File(
             label="Upload eBook or Multiple for Batch Processing (epub, mobi, pdf, txt, html)",
-            file_types=[".epub", ".mobi", ".pdf", ".txt", ".html"], file_count="multiple"
+            file_types=[".epub", ".mobi", ".pdf", ".txt", ".html"],
+            file_count="multiple",
+            type="filepath"
         )
         generate_btn = gr.Button("Start Processing", variant="primary")
         show_audiobooks_btn = gr.Button("Show All Completed Audiobooks", variant="secondary")
@@ -540,4 +545,11 @@ if __name__ == "__main__":
     port = int(port_str) if port_str else 7860
 
     print(f"Starting OmniVoice Ebook App on {host}:{port}")
-    app.queue().launch(server_name=host, server_port=port, debug=True)
+    
+    # ADD default_concurrency_limit and limit max_threads
+    app.queue(default_concurrency_limit=2).launch(
+        server_name=host, 
+        server_port=port, 
+        debug=True,
+        max_threads=10 # Prevents a "storm" of threads from crashing Pinokio
+    )
