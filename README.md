@@ -14,9 +14,12 @@ Built for [Pinokio](https://pinokio.computer/) - the easiest way to install and 
 * **Multi-Platform:** Tested and works on Windows (NVIDIA/AMD/CPU) and macOS (Apple Silicon).
 
 ## How to Install
-1. Download and install [Pinokio](https://pinokio.computer/).
-2. Open Pinokio, paste the link below into the address bar, and hit Enter:
+1. Install [Pinokio](https://pinokio.computer/).
+2. Copy this URL:
    `pinokio://download?uri=https://github.com/quantumlump/Ebook-to-Audiobook-with-OmniVoice`
+3. Paste it into your browser or the Pinokio address bar.
+
+[![Install with Pinokio](https://img.shields.io/badge/Install%20with-Pinokio-blue?style=for-the-badge&logo=openai)](https://pinokio.computer)
 3. Click **Download**, then click **Install**.
 
 ## Usage
