@@ -1,0 +1,6 @@
+{
+  "version": "5.0",
+  "title": "Ebook to Audiobook with OmniVoice",
+  "description": "Turn your eBooks into audiobooks using the OmniVoice text-to-speech model",
+  "icon": "icon.png"
+}
