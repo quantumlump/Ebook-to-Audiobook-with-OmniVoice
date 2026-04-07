@@ -33,7 +33,7 @@ except LookupError:
 # --- Zero Dependency Extractors & Tools ---
 import fitz  # PyMuPDF
 import mobi
-from ebooklib import epub, ITEM_DOCUMENT
+from ebooklib import epub, ITEM_DOCUMENT, ITEM_COVER, ITEM_IMAGE
 import imageio_ffmpeg
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
@@ -115,38 +115,13 @@ def convert_numbers_to_words(txt):
     return txt
 
 def strip_footnotes(text: str) -> str:
-    """
-    Cleans ebook text for TTS by removing mechanical citations and 
-    footnote markers while preserving narrative content and asides.
-    """
-    
-    # 1. Remove Bracketed Numeric Citations or [sic]
-    # Examples: [1], [1, 2], [1-5], [sic], [ibid]
-    # This is safe because authors rarely use square brackets for narrative.
     text = re.sub(r'\[\d+(?:,\s*\d+|-\d+)*\]', '', text)
     text = re.sub(r'\[(?:sic|ibid|ref|page\s\d+)\]', '', text, flags=re.IGNORECASE)
-
-    # 2. Remove Asterisk/Symbol footnote markers
-    # Matches: *1, *2, †, ‡ at the end of words or start of lines
     text = re.sub(r'(?<=\w)[\*\†\‡\§]\d*', '', text)
     text = re.sub(r'^\s*[\*\†\‡\§]\d*\s*', '', text, flags=re.MULTILINE)
-
-    # 3. Handle trailing numeric footnotes (The "Word.12" or "Word12" problem)
-    # Only removes numbers if they are 1-3 digits and attached to the end of a word/punctuation.
-    # Logic: Look for a word, then a period, then a small number. 
-    # This avoids touching "Version 2.0" or "8.8" because of the lookbehind.
     text = re.sub(r'(?<=[a-zA-Z])\.\d{1,3}\b', '.', text)
-    
-    # 4. Remove Author-Year Citations (Academic style)
-    # Example: (Smith, 2020) or (Jones 1999)
-    # This is safer than removing ALL parentheses.
     text = re.sub(r'\(\s*[A-Z][a-z]+,?\s+\d{4}\s*\)', '', text)
-
-    # 5. Clean up "Orphaned" footnote numbers at the start of lines
-    # Often found in OCR or poorly converted EPUBS.
     text = re.sub(r'^\s*\d+\b\s*', '', text, flags=re.MULTILINE)
-
-    # 6. Final Polish: Remove double spaces and trailing whitespace
     text = re.sub(r' {2,}', ' ', text)
     return text.strip()
 
@@ -187,68 +162,114 @@ def clean_and_normalize_text(raw_text: str) -> str:
     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
     return cleaned_text
 
-# --- Python Extractors ---
+# --- Extractors (Updated for Covers & Metadata) ---
+def get_epub_meta(book, namespace, name):
+    meta = book.get_metadata(namespace, name)
+    if meta and len(meta) > 0 and isinstance(meta[0], tuple) and len(meta[0]) > 0:
+        return meta[0][0]
+    return None
+
 def read_epub(file_path):
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         book = epub.read_epub(file_path)
-        text_content = []
-        title = book.get_metadata('DC', 'title')[0][0] if book.get_metadata('DC', 'title') else None
-        author = book.get_metadata('DC', 'creator')[0][0] if book.get_metadata('DC', 'creator') else None
+        text_content =[]
         
+        # Robust metadata extraction
+        title = get_epub_meta(book, 'DC', 'title')
+        author = get_epub_meta(book, 'DC', 'creator')
+        
+        # Cover extraction
+        cover_bytes = None
+        try:
+            for item in book.get_items_of_type(ITEM_COVER):
+                cover_bytes = item.get_content()
+                break
+            
+            # Fallback cover extraction (if cover is tagged as image)
+            if not cover_bytes:
+                for item in book.get_items_of_type(ITEM_IMAGE):
+                    name = item.get_name().lower()
+                    item_id = getattr(item, 'id', '').lower()
+                    if 'cover' in name or 'cover' in item_id:
+                        cover_bytes = item.get_content()
+                        break
+        except Exception as e:
+            print(f"EPUB cover extraction warning: {e}")
+            
         for item in book.get_items_of_type(ITEM_DOCUMENT):
             soup = BeautifulSoup(item.get_content(), 'html.parser')
-            
-            # --- APPLY PRO-TIP HERE ---
-            # This removes the tags AND their content entirely
             for unwanted in soup(["aside", "footnote", "reftag", "nav", "footer"]):
                 unwanted.decompose()
-            # ---------------------------
-
             text_content.append(soup.get_text(separator=' ', strip=True))
-        return ' '.join(text_content), title, author
+            
+        return ' '.join(text_content), title, author, cover_bytes
 
 def read_pdf(file_path):
     doc = fitz.open(file_path)
     title = doc.metadata.get("title")
     author = doc.metadata.get("author")
+    
+    # Extract First Page as Cover Image
+    cover_bytes = None
+    try:
+        if len(doc) > 0:
+            page = doc.load_page(0)
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            cover_bytes = pix.tobytes("jpeg")
+    except Exception as e:
+        print(f"PDF cover extraction warning: {e}")
+        
     text_content = [page.get_text() for page in doc]
-    return ' '.join(text_content), title, author
+    return ' '.join(text_content), title, author, cover_bytes
 
 def read_mobi(file_path):
     tempdir, ext_path = mobi.extract(file_path)
+    cover_bytes = None
     if ext_path.lower().endswith('.epub'):
-        text, title, author = read_epub(ext_path)
+        text, title, author, cover_bytes = read_epub(ext_path)
     else:
         with open(ext_path, 'r', encoding='utf-8', errors='ignore') as f:
             soup = BeautifulSoup(f.read(), 'html.parser')
             text = soup.get_text(separator=' ', strip=True)
             title, author = None, None
     shutil.rmtree(tempdir, ignore_errors=True)
-    return text, title, author
+    return text, title, author, cover_bytes
 
 def extract_text_and_metadata(file_path):
     ext = os.path.splitext(file_path)[1].lower()
-    title = os.path.splitext(os.path.basename(file_path))[0]
-    author = "Unknown Author"
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    
     raw_text = ""
-    if ext == '.epub': raw_text, t, a = read_epub(file_path)
-    elif ext == '.pdf': raw_text, t, a = read_pdf(file_path)
-    elif ext in['.mobi', '.azw3']: raw_text, t, a = read_mobi(file_path)
+    cover_bytes = None
+    t, a = None, None
+    
+    if ext == '.epub': raw_text, t, a, cover_bytes = read_epub(file_path)
+    elif ext == '.pdf': raw_text, t, a, cover_bytes = read_pdf(file_path)
+    elif ext in['.mobi', '.azw3']: raw_text, t, a, cover_bytes = read_mobi(file_path)
     elif ext == '.txt':
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f: raw_text = f.read()
-        t, a = None, None
-    elif ext in ['.htm', '.html']:
+    elif ext in['.htm', '.html']:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             soup = BeautifulSoup(f.read(), 'html.parser')
             raw_text = soup.get_text(separator=' ', strip=True)
-        t, a = None, None
     else: raise ValueError(f"Unsupported file format: {ext}")
-    if t: title = t
-    if a: author = a
+    
+    # Fallback Metadata Fix (if the book properties are left blank/untitled)
+    if t and t.strip() and t.strip().lower() != "untitled":
+        title = t.strip()
+    else:
+        title = base_name.replace("_", " ").title()
+        
+    if a and a.strip() and a.strip().lower() != "untitled":
+        author = a.strip()
+    else:
+        author = "Unknown Author"
+        
     if not raw_text.strip(): raise ValueError("No text could be extracted from the file.")
     text = clean_and_normalize_text(raw_text)
-    return text, title, author
+    
+    return text, title, author, cover_bytes
 
 def sanitize_filename(filename):
     sanitized = re.sub(r'[\/*?:"<>|\']', "", filename)
@@ -265,7 +286,7 @@ def show_converted_audiobooks():
 
 def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase_length, max_chunk_length, num_steps, progress=gr.Progress()):
     try:
-        processed_audiobooks = []
+        processed_audiobooks =[]
         num_ebooks = len(gen_file_input)
         ebook_frac = {"extract_text": 0.05, "infer": 0.90, "mp3_meta": 0.05}
 
@@ -293,7 +314,8 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
 
             progress(current_ebook_base_progress, desc=f"Ebook {idx+1}/{num_ebooks}: Extracting text...")
             try:
-                gen_text, ebook_title, ebook_author = extract_text_and_metadata(original_ebook_path)
+                # Includes cover bytes and robust metadata mapping
+                gen_text, ebook_title, ebook_author, cover_bytes = extract_text_and_metadata(original_ebook_path)
             except Exception as e:
                 print(f"Extraction error: {e}")
                 continue
@@ -303,10 +325,10 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
             overall_infer_start_frac = current_ebook_base_progress + (progress_offset_within_ebook / num_ebooks)
             temp_chunks_dir = os.path.join("Working_files", "temp_audio_chunks", sanitize_filename(ebook_title))
             ensure_directory(temp_chunks_dir)
-            chunk_file_paths = []
+            chunk_file_paths =[]
 
             initial_sentences = sent_tokenize(gen_text)
-            intermediate_phrases = []
+            intermediate_phrases =[]
             for sentence in initial_sentences:
                 if len(sentence) <= MAX_PHRASE_LENGTH: intermediate_phrases.append(sentence)
                 else:
@@ -323,7 +345,7 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
                         current_part = current_part[split_pos+1:].strip()
                     if current_part: intermediate_phrases.append(current_part)
 
-            text_super_chunks = []
+            text_super_chunks =[]
             current_chunk = ""
             for phrase in intermediate_phrases:
                 if len(current_chunk) + len(phrase) + 1 > MAX_CHUNK_LENGTH_CHARS:
@@ -375,7 +397,42 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
                     for path in chunk_file_paths: f.write(f"file '{os.path.basename(path)}'\n")
 
                 ensure_directory(final_mp3_dir)
-                ffmpeg_command = [FFMPEG_EXE, '-f', 'concat', '-safe', '0', '-i', 'concat_list.txt', '-c:a', 'libmp3lame', '-b:a', '192k', '-id3v2_version', '3', '-metadata', f'title={ebook_title}', '-metadata', f'artist={ebook_author}', '-metadata', f'album={ebook_title}', '-y', os.path.abspath(final_mp3_path)]
+                
+                # Base FFmpeg command
+                ffmpeg_command =[FFMPEG_EXE, '-f', 'concat', '-safe', '0', '-i', 'concat_list.txt']
+                
+                # Handling Cover Image Output map for MP3 tagging
+                has_cover = False
+                cover_path = os.path.join(temp_chunks_dir, "cover.jpg")
+                if cover_bytes:
+                    try:
+                        with open(cover_path, "wb") as f:
+                            f.write(cover_bytes)
+                        has_cover = True
+                    except Exception as e:
+                        print(f"Failed to write cover image: {e}")
+                
+                if has_cover:
+                    # Map the audio array [0:a] and the image [1:v] so it embeds the image
+                    ffmpeg_command.extend([
+                        '-i', cover_path,
+                        '-map', '0:a',
+                        '-map', '1:v',
+                        '-c:v', 'mjpeg',
+                        '-disposition:v', 'attached_pic'
+                    ])
+                
+                # Add Author/Title/Album Metadata explicitly 
+                ffmpeg_command.extend([
+                    '-c:a', 'libmp3lame', 
+                    '-b:a', '192k', 
+                    '-id3v2_version', '3', 
+                    '-metadata', f'title={ebook_title}', 
+                    '-metadata', f'artist={ebook_author}',   # Audiobooks use "artist" for Authors
+                    '-metadata', f'album={ebook_title}',     # Treat the entire book as an Album
+                    '-y', os.path.abspath(final_mp3_path)
+                ])
+
                 subprocess.run(ffmpeg_command, cwd=temp_chunks_dir, check=True)
                 
                 # --- ADD TO LIST AND YIELD IMMEDIATELY ---
@@ -400,7 +457,6 @@ def create_gradio_app():
         gr.Markdown("# eBook to Audiobook with OmniVoice")
         
         # --- INPUT SECTION ---
-        # Wrapping in a Column or Group ensures they stay together vertically
         with gr.Column():
             ref_audio_input = gr.Audio(
                 label="Upload Voice File (<15 sec) or Record", 
@@ -416,8 +472,6 @@ def create_gradio_app():
             generate_btn = gr.Button("Start Processing", variant="primary")
 
         # --- OUTPUT SECTION ---
-        # Because this is NOT inside a gr.Row with the section above, 
-        # it will always stay underneath.
         with gr.Column():
             audiobooks_output = gr.Files(label="Completed Audiobooks (Download as they finish)")
             show_audiobooks_btn = gr.Button("Show All Files in Output Folder", variant="secondary")
