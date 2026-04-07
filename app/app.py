@@ -459,7 +459,7 @@ def create_gradio_app():
         # --- INPUT SECTION ---
         with gr.Column():
             ref_audio_input = gr.Audio(
-                label="Upload Voice File (<15 sec) or Record", 
+                label="Use Default Voice, Upload Voice File, or Use Record Button", 
                 type="filepath", 
                 value=DEFAULT_REF_AUDIO_PATH
             )
