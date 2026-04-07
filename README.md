@@ -15,7 +15,7 @@ Built for [Pinokio](https://pinokio.computer/) - the easiest way to install and 
 
 ## How to Install
 1. Install [Pinokio](https://pinokio.computer/).
-2. Copy this text, paste it into your browser or the Pinokio address bar and click enter:
+2. Copy this text, paste it into your browser or the Pinokio address bar, then click enter:
    ```text
    pinokio://download?uri=https://github.com/quantumlump/Ebook-to-Audiobook-with-OmniVoice
 3. Click Download, then click Install.
