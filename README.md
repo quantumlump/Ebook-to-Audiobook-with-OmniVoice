@@ -7,7 +7,7 @@ Built for [Pinokio](https://pinokio.computer/) - the easiest way to install and 
 <img width="1464" height="1625" alt="image" src="https://github.com/user-attachments/assets/3f051597-c48d-4e4e-8745-6d4c67bb58fa" />
 
 ## Features
-* **Voice Cloning:** Upload a 15-second voice sample to narrate your entire book.
+* **Voice Cloning:** Default voice included but you can also upload a 15-second voice sample to narrate your entire book.
 * **Smart Chunking:** Built to avoid Out-Of-Memory (OOM) errors on low VRAM machines.
 * **Automatic Metadata:** MP3 files are automatically tagged with the book's title author, and cover art.
 * **Multi-Platform:** Tested and works on Windows (NVIDIA/AMD/CPU) and macOS (Apple Silicon).
