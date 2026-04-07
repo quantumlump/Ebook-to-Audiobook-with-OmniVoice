@@ -195,8 +195,16 @@ def read_epub(file_path):
         text_content = []
         title = book.get_metadata('DC', 'title')[0][0] if book.get_metadata('DC', 'title') else None
         author = book.get_metadata('DC', 'creator')[0][0] if book.get_metadata('DC', 'creator') else None
+        
         for item in book.get_items_of_type(ITEM_DOCUMENT):
             soup = BeautifulSoup(item.get_content(), 'html.parser')
+            
+            # --- APPLY PRO-TIP HERE ---
+            # This removes the tags AND their content entirely
+            for unwanted in soup(["aside", "footnote", "reftag", "nav", "footer"]):
+                unwanted.decompose()
+            # ---------------------------
+
             text_content.append(soup.get_text(separator=' ', strip=True))
         return ' '.join(text_content), title, author
 
