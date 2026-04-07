@@ -415,7 +415,7 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
                 if has_cover:
                     # Map the audio array [0:a] and the image [1:v] so it embeds the image
                     ffmpeg_command.extend([
-                        '-i', cover_path,
+                        '-i', 'cover.jpg',
                         '-map', '0:a',
                         '-map', '1:v',
                         '-c:v', 'mjpeg',
