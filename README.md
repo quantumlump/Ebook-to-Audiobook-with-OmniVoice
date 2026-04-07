@@ -10,7 +10,7 @@ Built for [Pinokio](https://pinokio.computer/) - the easiest way to install and 
 * **Multi-lingual:** Omnivoice supports over 600 languages
 * **Voice Cloning:** Default voice included but you can also upload a 15-second voice sample to narrate your entire book.
 * **Smart Chunking:** Built to avoid Out-Of-Memory (OOM) errors on low VRAM machines.
-* **Automatic Metadata:** MP3 files are automatically tagged with the book's title author, and cover art.
+* **Automatic Metadata:** MP3 files are automatically tagged with the book's title, author, and cover art.
 * **Multi-Platform:** Tested and works on Windows (NVIDIA/AMD/CPU) and macOS (Apple Silicon).
 
 ## How to Install
