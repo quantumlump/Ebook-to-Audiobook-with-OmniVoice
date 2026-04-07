@@ -114,6 +114,42 @@ def convert_numbers_to_words(txt):
     txt = re.sub(number_pattern, number_replacer, txt)
     return txt
 
+def strip_footnotes(text: str) -> str:
+    """
+    Cleans ebook text for TTS by removing mechanical citations and 
+    footnote markers while preserving narrative content and asides.
+    """
+    
+    # 1. Remove Bracketed Numeric Citations or [sic]
+    # Examples: [1], [1, 2], [1-5], [sic], [ibid]
+    # This is safe because authors rarely use square brackets for narrative.
+    text = re.sub(r'\[\d+(?:,\s*\d+|-\d+)*\]', '', text)
+    text = re.sub(r'\[(?:sic|ibid|ref|page\s\d+)\]', '', text, flags=re.IGNORECASE)
+
+    # 2. Remove Asterisk/Symbol footnote markers
+    # Matches: *1, *2, †, ‡ at the end of words or start of lines
+    text = re.sub(r'(?<=\w)[\*\†\‡\§]\d*', '', text)
+    text = re.sub(r'^\s*[\*\†\‡\§]\d*\s*', '', text, flags=re.MULTILINE)
+
+    # 3. Handle trailing numeric footnotes (The "Word.12" or "Word12" problem)
+    # Only removes numbers if they are 1-3 digits and attached to the end of a word/punctuation.
+    # Logic: Look for a word, then a period, then a small number. 
+    # This avoids touching "Version 2.0" or "8.8" because of the lookbehind.
+    text = re.sub(r'(?<=[a-zA-Z])\.\d{1,3}\b', '.', text)
+    
+    # 4. Remove Author-Year Citations (Academic style)
+    # Example: (Smith, 2020) or (Jones 1999)
+    # This is safer than removing ALL parentheses.
+    text = re.sub(r'\(\s*[A-Z][a-z]+,?\s+\d{4}\s*\)', '', text)
+
+    # 5. Clean up "Orphaned" footnote numbers at the start of lines
+    # Often found in OCR or poorly converted EPUBS.
+    text = re.sub(r'^\s*\d+\b\s*', '', text, flags=re.MULTILINE)
+
+    # 6. Final Polish: Remove double spaces and trailing whitespace
+    text = re.sub(r' {2,}', ' ', text)
+    return text.strip()
+
 def clean_and_normalize_text(raw_text: str) -> str:
     text = raw_text
     text = re.sub(r'\*\s*\d+\b', '', text) 
