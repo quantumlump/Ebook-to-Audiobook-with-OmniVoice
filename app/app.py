@@ -473,8 +473,12 @@ def create_gradio_app():
 
         # --- OUTPUT SECTION ---
         with gr.Column():
-            audiobooks_output = gr.Files(label="Completed Audiobooks (Download as they finish)")
-            show_audiobooks_btn = gr.Button("Show All Files in Output Folder", variant="secondary")
+            gr.Markdown("### Current Batch Progress")
+            batch_output = gr.Files(label="Audiobooks Finishing in Current Batch")
+            
+            gr.Markdown("### Completed Audiobooks Library")
+            library_output = gr.Files(label="All Saved Audiobooks in Output Folder")
+            show_audiobooks_btn = gr.Button("Refresh / Show All Saved Audiobooks", variant="secondary")
 
         with gr.Accordion("Advanced Settings", open=False):
             ref_text_input = gr.Textbox(label="Reference Text", lines=2, value=DEFAULT_REF_TEXT)
@@ -483,12 +487,22 @@ def create_gradio_app():
             max_phrase_slider = gr.Slider(label="Max Phrase Length", minimum=200, maximum=2000, value=300, step=50)
             max_chunk_slider = gr.Slider(label="Max Chunk Length", minimum=500, maximum=4000, value=800, step=50)
 
+        # 1. Target the batch progress to the batch_output component
         generate_btn.click(
             basic_tts,
             inputs=[ref_audio_input, ref_text_input, gen_file_input, speed_slider, max_phrase_slider, max_chunk_slider, num_steps_slider],
-            outputs=[audiobooks_output]
+            outputs=[batch_output]
         )
-        show_audiobooks_btn.click(show_converted_audiobooks, inputs=[], outputs=[audiobooks_output])
+        
+        # 2. Target the refresh button to the entirely separate library_output component
+        show_audiobooks_btn.click(
+            show_converted_audiobooks, 
+            inputs=[], 
+            outputs=[library_output]
+        )
+        
+        # Optional Bonus: Automatically load previously completed books when the web page is opened!
+        app.load(show_converted_audiobooks, inputs=[], outputs=[library_output])
         
     return app
 
