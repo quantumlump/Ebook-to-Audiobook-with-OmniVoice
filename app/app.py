@@ -279,7 +279,8 @@ def ensure_directory(directory_path):
     os.makedirs(directory_path, exist_ok=True)
 
 def show_converted_audiobooks():
-    output_dir = os.path.join("Working_files", "Book")
+    # Use absolute paths so Gradio can reliably serve the downloads
+    output_dir = os.path.abspath(os.path.join("Working_files", "Book"))
     if not os.path.exists(output_dir): return []
     files =[os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith(('.mp3', '.m4b'))]
     return files if files else[]
@@ -388,7 +389,7 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
             progress(current_ebook_base_progress + (progress_offset_within_ebook / num_ebooks), desc=f"Ebook {idx+1}/{num_ebooks}: Finalizing MP3...")
             
             sanitized_title = sanitize_filename(ebook_title) or f"audiobook_{idx}"
-            final_mp3_dir = os.path.join("Working_files", "Book")
+            final_mp3_dir = os.path.abspath(os.path.join("Working_files", "Book"))
             final_mp3_path = os.path.join(final_mp3_dir, f"{sanitized_title}.mp3")
 
             try:
@@ -498,11 +499,12 @@ def create_gradio_app():
         show_audiobooks_btn.click(
             show_converted_audiobooks, 
             inputs=[], 
-            outputs=[library_output]
+            outputs=[library_output],
+            queue=False  # <--- ADD THIS TO BYPASS THE QUEUE
         )
         
         # Optional Bonus: Automatically load previously completed books when the web page is opened!
-        app.load(show_converted_audiobooks, inputs=[], outputs=[library_output])
+        app.load(show_converted_audiobooks, inputs=[], outputs=[library_output], queue=False)
         
     return app
 
