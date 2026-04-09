@@ -1,7 +1,19 @@
 import os
+import tempfile  # <-- Add this import
+
 LOCAL_TEMP = os.path.join(os.getcwd(), "gradio_temp")
 os.makedirs(LOCAL_TEMP, exist_ok=True)
+
+# 1. Set Gradio's temp directory
 os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
+
+# 2. Force FastAPI/Starlette to use this directory for the initial incoming upload chunks
+os.environ["TMP"] = LOCAL_TEMP
+os.environ["TEMP"] = LOCAL_TEMP
+os.environ["TMPDIR"] = LOCAL_TEMP
+
+# 3. Force Python's underlying tempfile module to use this directory globally
+tempfile.tempdir = LOCAL_TEMP
 import re
 import gc
 import time
