@@ -24,19 +24,27 @@ import warnings
 from num2words import num2words
 from decimal import Decimal
 
-# Windows Defender locks newly uploaded files to scan them. Gradio tries to move them 
-# immediately, causing a PermissionError (WinError 32) and crashing the upload endpoint.
-# This monkey-patch forces Python to wait and retry if the file is locked by the OS.
+# --- WINDOWS FILE LOCK & UPLOAD FIXES ---
+# Fix 1: Stop FastAPI from crashing on files > 1MB. 
+# FastAPI writes uploads > 1MB to a temporary disk file, crashing Windows/Pinokio. 
+# We force it to keep up to 100MB in RAM instead to bypass the disk entirely during upload.
+_original_spooled = tempfile.SpooledTemporaryFile
+def _patched_spooled(max_size=0, *args, **kwargs):
+    # Overwrite the 1MB limit to 100MB (100 * 1024 * 1024 bytes)
+    return _original_spooled(104857600, *args, **kwargs)
+tempfile.SpooledTemporaryFile = _patched_spooled
+
+# Fix 2: Windows Defender monkey-patch for Gradio's internal file moves
 _original_rename = os.rename
 _original_replace = os.replace
 _original_move = shutil.move
 
 def _retry_rename(*args, **kwargs):
-    for i in range(15): # Try up to 15 times
+    for i in range(15):
         try: return _original_rename(*args, **kwargs)
         except PermissionError:
             if i == 14: raise
-            time.sleep(0.5) # Wait half a second before retrying
+            time.sleep(0.5)
 os.rename = _retry_rename
 
 def _retry_replace(*args, **kwargs):
