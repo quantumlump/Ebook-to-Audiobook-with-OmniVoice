@@ -24,6 +24,37 @@ import warnings
 from num2words import num2words
 from decimal import Decimal
 
+# Windows Defender locks newly uploaded files to scan them. Gradio tries to move them 
+# immediately, causing a PermissionError (WinError 32) and crashing the upload endpoint.
+# This monkey-patch forces Python to wait and retry if the file is locked by the OS.
+_original_rename = os.rename
+_original_replace = os.replace
+_original_move = shutil.move
+
+def _retry_rename(*args, **kwargs):
+    for i in range(15): # Try up to 15 times
+        try: return _original_rename(*args, **kwargs)
+        except PermissionError:
+            if i == 14: raise
+            time.sleep(0.5) # Wait half a second before retrying
+os.rename = _retry_rename
+
+def _retry_replace(*args, **kwargs):
+    for i in range(15):
+        try: return _original_replace(*args, **kwargs)
+        except PermissionError:
+            if i == 14: raise
+            time.sleep(0.5)
+os.replace = _retry_replace
+
+def _retry_move(*args, **kwargs):
+    for i in range(15):
+        try: return _original_move(*args, **kwargs)
+        except PermissionError:
+            if i == 14: raise
+            time.sleep(0.5)
+shutil.move = _retry_move
+
 import gradio as gr
 import numpy as np
 import soundfile as sf
