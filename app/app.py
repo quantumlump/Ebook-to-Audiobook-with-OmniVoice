@@ -31,6 +31,7 @@ class SafeWinOSWrapper:
     """
     def __init__(self, func):
         self.func = func
+        self.func_name = getattr(func, '__name__', '')
         try:
             functools.update_wrapper(self, func)
         except Exception:
@@ -46,6 +47,27 @@ class SafeWinOSWrapper:
                     if i < 19:
                         time.sleep(0.1)
                         continue
+                    
+                    # --- THE FIX FOR GRADIO >1MB UPLOADS ON WINDOWS ---
+                    # If the file is STILL locked after 2 seconds, it is NOT Windows Defender.
+                    # It is python-multipart holding the SpooledTemporaryFile open.
+                    # Windows natively forbids moving or renaming an open file (WinError 32).
+                    # Instead of crashing, we gracefully fallback to copying the file.
+                    if self.func_name in ('move', 'rename', 'replace'):
+                        src = args[0] if len(args) > 0 else kwargs.get('src')
+                        dst = args[1] if len(args) > 1 else kwargs.get('dst')
+                        
+                        if src and dst:
+                            import shutil
+                            try:
+                                shutil.copy2(src, dst)
+                                # We deliberately DO NOT try to delete 'src' here. Since 
+                                # python-multipart holds it open, Python will cleanly 
+                                # garbage-collect and delete it safely when the route finishes!
+                                return dst if self.func_name == 'move' else None
+                            except Exception:
+                                pass # If the fallback copy fails, drop down to raise the original error
+
                 raise
         return self.func(*args, **kwargs)
 
