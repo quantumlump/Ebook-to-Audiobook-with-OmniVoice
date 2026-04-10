@@ -1,6 +1,7 @@
 import os
 import shutil
 import tempfile
+import time
 
 # 1. Clean up Gradio's temp folder on startup to prevent bloat
 LOCAL_TEMP = os.path.abspath(os.path.join(os.getcwd(), "gradio_temp"))
@@ -15,17 +16,48 @@ os.makedirs(LOCAL_TEMP, exist_ok=True)
 os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
 
 # 3. ABSOLUTE FIX FOR WINDOWS UPLOAD CRASHES (WinError 32)
-# The Gradio backend (Starlette) hardcodes a 1MB limit for uploads.
-# Anything > 1MB gets dumped to the hard drive mid-upload. On Windows, 
-# antivirus (Defender) instantly scans new files, locking them. 
-# When Gradio tries to read it milliseconds later, it gets Permission Denied and crashes.
-# We intercept Python's temporary file creator and force a 1GB limit, 
-# keeping the eBook safely in RAM during the upload process.
+# Gradio writes large chunked uploads directly to disk. The instant they finish, 
+# Windows Defender locks the file for scanning. When Gradio tries to move the file 
+# milliseconds later, it crashes. We intercept Python's move/rename operations 
+# with a 1.5-second retry loop, giving Defender enough time to finish scanning.
+
+def _retry_on_winerror32(func, *args, **kwargs):
+    retries = 15  # Up to 1.5 seconds wait
+    for i in range(retries):
+        try:
+            return func(*args, **kwargs)
+        except PermissionError as e:
+            # WinError 32 = ERROR_SHARING_VIOLATION (file is locked)
+            if getattr(e, 'winerror', None) == 32:
+                if i < retries - 1:
+                    time.sleep(0.1) # Wait 100ms and try again
+                    continue
+            raise
+
+_original_rename = os.rename
+_original_replace = os.replace
+_original_remove = os.remove
+_original_unlink = os.unlink
+_original_move = shutil.move
+
+def patched_rename(*args, **kwargs): return _retry_on_winerror32(_original_rename, *args, **kwargs)
+def patched_replace(*args, **kwargs): return _retry_on_winerror32(_original_replace, *args, **kwargs)
+def patched_remove(*args, **kwargs): return _retry_on_winerror32(_original_remove, *args, **kwargs)
+def patched_unlink(*args, **kwargs): return _retry_on_winerror32(_original_unlink, *args, **kwargs)
+def patched_move(*args, **kwargs): return _retry_on_winerror32(_original_move, *args, **kwargs)
+
+os.rename = patched_rename
+os.replace = patched_replace
+os.remove = patched_remove
+os.unlink = patched_unlink
+shutil.move = patched_move
+
+# We also keep the SpooledTemporaryFile patch as an extra layer of safety 
+# for any older extensions/dependencies that still use Starlette uploads.
 _original_spooled = tempfile.SpooledTemporaryFile
 
 class PatchedSpooledTemporaryFile(_original_spooled):
     def __init__(self, *args, **kwargs):
-        # Override max_size to 1GB (1024 * 1024 * 1024 bytes) regardless of what Starlette asks for
         if 'max_size' in kwargs:
             kwargs['max_size'] = 1024 * 1024 * 1024
         elif len(args) > 0:
@@ -36,8 +68,6 @@ class PatchedSpooledTemporaryFile(_original_spooled):
 
 tempfile.SpooledTemporaryFile = PatchedSpooledTemporaryFile
 
-
-# --- Standard Imports Start Here ---
 import re
 import gc
 import time
