@@ -60,6 +60,25 @@ from ebooklib import epub, ITEM_DOCUMENT, ITEM_COVER, ITEM_IMAGE
 import imageio_ffmpeg
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
+import logging
+import sys
+
+# 1. Force all Python logs to show up in the terminal
+logging.basicConfig(
+    level=logging.INFO, # Change to logging.DEBUG for even more detail
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+# 2. Specifically force Transformers and Gradio to stop being quiet
+import transformers
+transformers.utils.logging.set_verbosity_info()
+
+# 3. If you want to see every single web request Gradio/FastAPI receives:
+logging.getLogger("uvicorn").setLevel(logging.INFO)
+logging.getLogger("fastapi").setLevel(logging.INFO)
+
+
 # --- OmniVoice Engine Imports ---
 from omnivoice import OmniVoice, OmniVoiceGenerationConfig
 
