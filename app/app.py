@@ -1,6 +1,10 @@
 import os
 import shutil
 import tempfile
+tempfile.SpooledTemporaryFile.__init__.__defaults__ = (
+    32 * 1024 * 1024,  # 32MB max_size before spilling to disk
+    *tempfile.SpooledTemporaryFile.__init__.__defaults__[1:]
+)
 import time
 import functools
 import builtins
