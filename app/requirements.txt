@@ -16,3 +16,4 @@ num2words
 PyMuPDF
 mobi
 imageio-ffmpeg
+torchcodec
