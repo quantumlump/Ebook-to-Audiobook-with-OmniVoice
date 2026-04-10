@@ -70,6 +70,8 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
+logging.getLogger("asyncio").setLevel(logging.CRITICAL)
+
 # 2. Specifically force Transformers and Gradio to stop being quiet
 import transformers
 transformers.utils.logging.set_verbosity_info()
