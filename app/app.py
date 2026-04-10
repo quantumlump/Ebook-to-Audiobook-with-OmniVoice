@@ -510,7 +510,7 @@ DEFAULT_REF_AUDIO_PATH = "default_voice.mp3"
 DEFAULT_REF_TEXT = "The birch canoe slid on the smooth planks. Glue the sheet to the dark blue background. It's easy to tell the depth of a well. The juice of lemons makes fine punch."
 
 def create_gradio_app():
-    with gr.Blocks(theme=gr.themes.Ocean()) as app:
+    with gr.Blocks() as app:
         gr.Markdown("# eBook to Audiobook with OmniVoice")
         
         # --- INPUT SECTION ---
@@ -567,4 +567,4 @@ def create_gradio_app():
 
 if __name__ == "__main__":
     app = create_gradio_app()
-    app.queue(default_concurrency_limit=2).launch(server_name=os.environ.get("OMNIVOICE_HOST", "127.0.0.1"), server_port=int(os.environ.get("OMNIVOICE_PORT", 7860)), max_threads=10, show_error=True, quiet=False)
+    app.queue(default_concurrency_limit=2).launch(theme=gr.themes.Ocean(), server_name=os.environ.get("OMNIVOICE_HOST", "127.0.0.1"), server_port=int(os.environ.get("OMNIVOICE_PORT", 7860)), max_threads=10, show_error=True, quiet=False)
