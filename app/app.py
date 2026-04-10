@@ -3,6 +3,9 @@ import shutil
 import tempfile
 import time
 import functools
+import pathlib
+import builtins
+import io
 
 # 1. Clean up Gradio's temp folder on startup to prevent bloat
 LOCAL_TEMP = os.path.abspath(os.path.join(os.getcwd(), "gradio_temp"))
@@ -16,14 +19,14 @@ os.makedirs(LOCAL_TEMP, exist_ok=True)
 # 2. Tell Gradio to use this local folder
 os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
 
-# 3. ABSOLUTE FIX FOR WINDOWS UPLOAD CRASHES (WinError 32)
-# Gradio writes large chunked uploads directly to disk. The instant they finish, 
-# Windows Defender locks the file for scanning. When Gradio tries to move the file 
-# milliseconds later, it crashes. We intercept Python's move/rename operations 
-# with a 1.5-second retry loop.
+# 3. THE ULTIMATE WINERROR 32 PATCH
+# Gradio 4 streams large uploads directly to disk. When the upload finishes, 
+# Windows Defender instantly locks the file for scanning. Gradio immediately 
+# uses pathlib or shutil to move/rename/read the file, resulting in WinError 32. 
+# We intercept ALL file operations and add a 3.0-second retry loop.
 
 def _retry_on_winerror32(func, *args, **kwargs):
-    retries = 15  # Up to 1.5 seconds wait
+    retries = 30  # Up to 3.0 seconds wait for Defender to finish
     for i in range(retries):
         try:
             return func(*args, **kwargs)
@@ -35,8 +38,6 @@ def _retry_on_winerror32(func, *args, **kwargs):
                     continue
             raise
 
-# We use a callable class instead of a standard function to prevent Python from 
-# accidentally turning these into "bound methods" when imported by other modules like pathlib.
 class WinError32RetryWrapper:
     def __init__(self, func):
         self.func = func
@@ -44,26 +45,47 @@ class WinError32RetryWrapper:
     def __call__(self, *args, **kwargs):
         return _retry_on_winerror32(self.func, *args, **kwargs)
 
+# A. Patch core OS functions
 os.rename = WinError32RetryWrapper(os.rename)
 os.replace = WinError32RetryWrapper(os.replace)
 os.remove = WinError32RetryWrapper(os.remove)
 os.unlink = WinError32RetryWrapper(os.unlink)
+
+# B. Patch Shutil functions
 shutil.move = WinError32RetryWrapper(shutil.move)
+shutil.copy = WinError32RetryWrapper(shutil.copy)
+shutil.copy2 = WinError32RetryWrapper(shutil.copy2)
+shutil.copyfile = WinError32RetryWrapper(shutil.copyfile)
 
-# We also keep the SpooledTemporaryFile patch as an extra layer of safety 
-# for any older extensions/dependencies that still use Starlette uploads.
+# C. Patch Pathlib operations (Gradio 4 heavily uses these, bypassing os.*)
+_orig_path_rename = pathlib.Path.rename
+_orig_path_replace = pathlib.Path.replace
+_orig_path_unlink = pathlib.Path.unlink
+
+def _patched_path_rename(self, target): return _retry_on_winerror32(_orig_path_rename, self, target)
+def _patched_path_replace(self, target): return _retry_on_winerror32(_orig_path_replace, self, target)
+def _patched_path_unlink(self, missing_ok=False): 
+    try: return _retry_on_winerror32(_orig_path_unlink, self, missing_ok=missing_ok)
+    except TypeError: return _retry_on_winerror32(_orig_path_unlink, self) # Fallback for old Pythons
+
+pathlib.Path.rename = _patched_path_rename
+pathlib.Path.replace = _patched_path_replace
+pathlib.Path.unlink = _patched_path_unlink
+
+# D. Patch builtins.open (In case Gradio tries to read the file while it's locked)
+_orig_open = builtins.open
+def _patched_open(*args, **kwargs): return _retry_on_winerror32(_orig_open, *args, **kwargs)
+builtins.open = _patched_open
+io.open = _patched_open
+
+# E. Keep the SpooledTemporaryFile patch for Starlette fallbacks
 _original_spooled = tempfile.SpooledTemporaryFile
-
 class PatchedSpooledTemporaryFile(_original_spooled):
     def __init__(self, *args, **kwargs):
-        if 'max_size' in kwargs:
-            kwargs['max_size'] = 1024 * 1024 * 1024
-        elif len(args) > 0:
-            args = (1024 * 1024 * 1024,) + args[1:]
-        else:
-            kwargs['max_size'] = 1024 * 1024 * 1024
+        if 'max_size' in kwargs: kwargs['max_size'] = 1024 * 1024 * 1024
+        elif len(args) > 0: args = (1024 * 1024 * 1024,) + args[1:]
+        else: kwargs['max_size'] = 1024 * 1024 * 1024
         super().__init__(*args, **kwargs)
-
 tempfile.SpooledTemporaryFile = PatchedSpooledTemporaryFile
 
 
