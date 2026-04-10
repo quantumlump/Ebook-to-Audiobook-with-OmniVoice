@@ -553,4 +553,4 @@ def create_gradio_app():
 
 if __name__ == "__main__":
     app = create_gradio_app()
-    app.queue(default_concurrency_limit=2).launch(server_name=os.environ.get("OMNIVOICE_HOST", "127.0.0.1"), server_port=int(os.environ.get("OMNIVOICE_PORT", 7860)), max_threads=10)
+    app.queue(default_concurrency_limit=2).launch(server_name=os.environ.get("OMNIVOICE_HOST", "127.0.0.1"), server_port=int(os.environ.get("OMNIVOICE_PORT", 7860)), max_threads=10, show_error=True, quiet=False)
