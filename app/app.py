@@ -49,10 +49,14 @@ class SafeWinOSWrapper:
                         continue
                     
                     # --- THE FIX FOR GRADIO >1MB UPLOADS ON WINDOWS ---
-                    # If the file is STILL locked after 2 seconds, it is NOT Windows Defender.
-                    # It is python-multipart holding the SpooledTemporaryFile open.
-                    # Windows natively forbids moving or renaming an open file (WinError 32).
-                    # Instead of crashing, we gracefully fallback to copying the file.
+                    
+                    # 1. Ignore permission modification and deletion errors on locked files.
+                    # Windows completely forbids chmod/unlink on open FastAPI temp files.
+                    # It is perfectly safe to return None and ignore these.
+                    if self.func_name in ('chmod', 'remove', 'unlink'):
+                        return None
+                        
+                    # 2. Fallback to copying if Gradio is trying to move/rename the open file.
                     if self.func_name in ('move', 'rename', 'replace'):
                         src = args[0] if len(args) > 0 else kwargs.get('src')
                         dst = args[1] if len(args) > 1 else kwargs.get('dst')
@@ -60,14 +64,16 @@ class SafeWinOSWrapper:
                         if src and dst:
                             import shutil
                             try:
-                                shutil.copy2(src, dst)
-                                # We deliberately DO NOT try to delete 'src' here. Since 
-                                # python-multipart holds it open, Python will cleanly 
-                                # garbage-collect and delete it safely when the route finishes!
+                                # We MUST use `copyfile` and NOT `copy2` or `copy`. 
+                                # `copyfile` only copies data. `copy2` attempts to copy 
+                                # permissions via chmod, which will instantly crash again.
+                                shutil.copyfile(src, dst)
                                 return dst if self.func_name == 'move' else None
-                            except Exception:
-                                pass # If the fallback copy fails, drop down to raise the original error
+                            except Exception as fallback_err:
+                                print(f"Fallback copy failed: {fallback_err}")
+                                pass 
 
+                # If it's not a sharing/access violation, or fallback failed, raise normally
                 raise
         return self.func(*args, **kwargs)
 
