@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import time
+import functools
 
 # 1. Clean up Gradio's temp folder on startup to prevent bloat
 LOCAL_TEMP = os.path.abspath(os.path.join(os.getcwd(), "gradio_temp"))
@@ -19,7 +20,7 @@ os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
 # Gradio writes large chunked uploads directly to disk. The instant they finish, 
 # Windows Defender locks the file for scanning. When Gradio tries to move the file 
 # milliseconds later, it crashes. We intercept Python's move/rename operations 
-# with a 1.5-second retry loop, giving Defender enough time to finish scanning.
+# with a 1.5-second retry loop.
 
 def _retry_on_winerror32(func, *args, **kwargs):
     retries = 15  # Up to 1.5 seconds wait
@@ -34,23 +35,20 @@ def _retry_on_winerror32(func, *args, **kwargs):
                     continue
             raise
 
-_original_rename = os.rename
-_original_replace = os.replace
-_original_remove = os.remove
-_original_unlink = os.unlink
-_original_move = shutil.move
+# We use a callable class instead of a standard function to prevent Python from 
+# accidentally turning these into "bound methods" when imported by other modules like pathlib.
+class WinError32RetryWrapper:
+    def __init__(self, func):
+        self.func = func
+        functools.update_wrapper(self, func)
+    def __call__(self, *args, **kwargs):
+        return _retry_on_winerror32(self.func, *args, **kwargs)
 
-def patched_rename(*args, **kwargs): return _retry_on_winerror32(_original_rename, *args, **kwargs)
-def patched_replace(*args, **kwargs): return _retry_on_winerror32(_original_replace, *args, **kwargs)
-def patched_remove(*args, **kwargs): return _retry_on_winerror32(_original_remove, *args, **kwargs)
-def patched_unlink(*args, **kwargs): return _retry_on_winerror32(_original_unlink, *args, **kwargs)
-def patched_move(*args, **kwargs): return _retry_on_winerror32(_original_move, *args, **kwargs)
-
-os.rename = patched_rename
-os.replace = patched_replace
-os.remove = patched_remove
-os.unlink = patched_unlink
-shutil.move = patched_move
+os.rename = WinError32RetryWrapper(os.rename)
+os.replace = WinError32RetryWrapper(os.replace)
+os.remove = WinError32RetryWrapper(os.remove)
+os.unlink = WinError32RetryWrapper(os.unlink)
+shutil.move = WinError32RetryWrapper(shutil.move)
 
 # We also keep the SpooledTemporaryFile patch as an extra layer of safety 
 # for any older extensions/dependencies that still use Starlette uploads.
@@ -67,6 +65,7 @@ class PatchedSpooledTemporaryFile(_original_spooled):
         super().__init__(*args, **kwargs)
 
 tempfile.SpooledTemporaryFile = PatchedSpooledTemporaryFile
+
 
 import re
 import gc
