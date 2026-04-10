@@ -7,9 +7,16 @@ import re
 import gc
 import subprocess
 import warnings
+import starlette.datastructures
 
-# --- 1. CLEAN GRADIO TEMP DIRECTORY ---
-LOCAL_TEMP = os.path.abspath(os.path.join(os.getcwd(), "gradio_temp"))
+# --- 1. THE PINOKIO WATCHER CRASH FIX ---
+# Pinokio watches the current working directory for file changes. If we stream
+# a large upload to a local temp folder, it triggers hundreds of rapid file events,
+# instantly overloading and crashing Pinokio on Windows.
+# FIX: Move Gradio's temp folder OUTSIDE the Pinokio workspace to the Windows system temp folder.
+SYSTEM_TEMP = tempfile.gettempdir()
+LOCAL_TEMP = os.path.join(SYSTEM_TEMP, "omnivoice_gradio_temp")
+
 if os.path.exists(LOCAL_TEMP):
     try:
         shutil.rmtree(LOCAL_TEMP, ignore_errors=True)
@@ -18,28 +25,11 @@ if os.path.exists(LOCAL_TEMP):
 os.makedirs(LOCAL_TEMP, exist_ok=True)
 os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
 
-# --- 2. THE DEFINITIVE WINDOWS RAM-SPOOL PATCH ---
-# On Windows, when an uploaded file exceeds ~1MB, Python switches from holding it 
-# in memory to writing a locked temp file to disk. Gradio then crashes trying to access it.
-# We patch SpooledTemporaryFile to hold up to 1GB in memory, completely bypassing the disk!
-
-_original_spooled = tempfile.SpooledTemporaryFile
-
-class _PatchedSpooled(_original_spooled):
-    def __init__(self, max_size=0, *args, **kwargs):
-        # Force the RAM limit to 1 Gigabyte instead of 1 Megabyte
-        super().__init__(max_size=1024 * 1024 * 1024, *args, **kwargs)
-
-tempfile.SpooledTemporaryFile = _PatchedSpooled
-
-# We also ensure any NamedTemporaryFiles created by Gradio do not enforce a strict Windows lock.
-_original_named = tempfile.NamedTemporaryFile
-
-def _patched_named(*args, **kwargs):
-    kwargs['delete'] = False
-    return _original_named(*args, **kwargs)
-
-tempfile.NamedTemporaryFile = _patched_named
+# --- 2. THE FASTAPI RAM SPOOL FIX ---
+# Prevent FastAPI from spooling uploads < 100MB to disk at all.
+# This keeps the eBook entirely in RAM during upload, completely bypassing 
+# Windows disk locks and file-watcher events, making the upload instant!
+starlette.datastructures.UploadFile.spool_max_size = 100 * 1024 * 1024 
 
 
 from num2words import num2words
