@@ -308,7 +308,7 @@ def show_converted_audiobooks():
     files =[os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith(('.mp3', '.m4b'))]
     return files if files else[]
 
-def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase_length, max_chunk_length, num_steps, progress=gr.Progress()):
+def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase_length, max_chunk_length, num_steps, cfg, progress=gr.Progress()):
     try:
         processed_audiobooks =[]
         num_ebooks = len(gen_file_input)
