@@ -24,44 +24,46 @@ import warnings
 from num2words import num2words
 from decimal import Decimal
 
-# --- WINDOWS FILE LOCK & UPLOAD FIXES ---
-# Fix 1: Stop FastAPI from crashing on files > 1MB. 
-# FastAPI writes uploads > 1MB to a temporary disk file, crashing Windows/Pinokio. 
-# We force it to keep up to 100MB in RAM instead to bypass the disk entirely during upload.
-_original_spooled = tempfile.SpooledTemporaryFile
-def _patched_spooled(max_size=0, *args, **kwargs):
-    # Overwrite the 1MB limit to 100MB (100 * 1024 * 1024 bytes)
-    return _original_spooled(104857600, *args, **kwargs)
-tempfile.SpooledTemporaryFile = _patched_spooled
-
-# Fix 2: Windows Defender monkey-patch for Gradio's internal file moves
+# --- WINDOWS UPLOAD CRASH FIX (FINAL) ---
+# On Windows, FastAPI leaves uploaded files > 1MB open in the background.
+# When Gradio attempts to `shutil.move()` or `os.rename()` these open files,
+# Windows strictly forbids it and throws "PermissionError:[WinError 32]".
+# This patch intercepts the failure and forces a direct file copy instead.
+_original_move = shutil.move
 _original_rename = os.rename
 _original_replace = os.replace
-_original_move = shutil.move
 
-def _retry_rename(*args, **kwargs):
-    for i in range(15):
-        try: return _original_rename(*args, **kwargs)
-        except PermissionError:
-            if i == 14: raise
-            time.sleep(0.5)
-os.rename = _retry_rename
+def _fallback_copy(src, dst, original_func, *args, **kwargs):
+    try:
+        return original_func(src, dst, *args, **kwargs)
+    except PermissionError as e:
+        src_str = str(src)
+        dst_str = str(dst)
+        if os.path.isfile(src_str):
+            try:
+                # We can't move the open file, but Windows allows us to copy it!
+                shutil.copy2(src_str, dst_str)
+                try:
+                    os.remove(src_str) # Try to clean up the original
+                except OSError:
+                    pass # If it's still locked, let the OS clean it up later
+                return dst
+            except Exception:
+                raise e # If copy also fails, raise the original error
+        raise e
 
-def _retry_replace(*args, **kwargs):
-    for i in range(15):
-        try: return _original_replace(*args, **kwargs)
-        except PermissionError:
-            if i == 14: raise
-            time.sleep(0.5)
-os.replace = _retry_replace
+def _patched_move(src, dst, *args, **kwargs):
+    return _fallback_copy(src, dst, _original_move, *args, **kwargs)
 
-def _retry_move(*args, **kwargs):
-    for i in range(15):
-        try: return _original_move(*args, **kwargs)
-        except PermissionError:
-            if i == 14: raise
-            time.sleep(0.5)
-shutil.move = _retry_move
+def _patched_rename(src, dst, *args, **kwargs):
+    return _fallback_copy(src, dst, _original_rename, *args, **kwargs)
+
+def _patched_replace(src, dst, *args, **kwargs):
+    return _fallback_copy(src, dst, _original_replace, *args, **kwargs)
+
+shutil.move = _patched_move
+os.rename = _patched_rename
+os.replace = _patched_replace
 
 import gradio as gr
 import numpy as np
