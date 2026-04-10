@@ -389,7 +389,7 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
             ebook_start_time = time.time()
             progress_updater = EbookProgressUpdater(progress, num_super_chunks, idx, num_ebooks, ebook_start_time)
 
-            ggen_config = OmniVoiceGenerationConfig(num_step=NUM_GENERATION_STEPS, cfg_scale=float(cfg))
+            gen_config = OmniVoiceGenerationConfig(num_step=NUM_GENERATION_STEPS, guidance_scale=float(cfg))
             for i, text_chunk in enumerate(text_super_chunks):
                 progress_updater.set_chunk_index(i)
                 chunk_progress_start = overall_infer_start_frac + (i / num_super_chunks) * (ebook_frac["infer"] / num_ebooks)
