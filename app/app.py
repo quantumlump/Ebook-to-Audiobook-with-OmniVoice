@@ -375,7 +375,7 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
             progress_offset_within_ebook += ebook_frac["extract_text"]
             
             overall_infer_start_frac = current_ebook_base_progress + (progress_offset_within_ebook / num_ebooks)
-            temp_chunks_dir = os.path.join("Working_files", "temp_audio_chunks", sanitize_filename(ebook_title))
+            temp_chunks_dir = os.path.abspath(os.path.join("Working_files", "temp_audio_chunks", sanitize_filename(ebook_title)))
             ensure_directory(temp_chunks_dir)
             chunk_file_paths =[]
 
