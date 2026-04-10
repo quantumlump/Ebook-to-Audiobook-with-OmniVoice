@@ -1,47 +1,79 @@
 import os
-import tempfile  # <-- Add this import
+import shutil
+import tempfile
+import time
 
 LOCAL_TEMP = os.path.join(os.getcwd(), "gradio_temp")
+
+# 1. Clean up old temp files from previous runs to prevent bloat
+if os.path.exists(LOCAL_TEMP):
+    try:
+        shutil.rmtree(LOCAL_TEMP, ignore_errors=True)
+    except Exception:
+        pass
 os.makedirs(LOCAL_TEMP, exist_ok=True)
 
-# 1. Set Gradio's temp directory
+# 2. Force all temp files to use this local directory
 os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
-
-# 2. Force FastAPI/Starlette to use this directory for the initial incoming upload chunks
 os.environ["TMP"] = LOCAL_TEMP
 os.environ["TEMP"] = LOCAL_TEMP
 os.environ["TMPDIR"] = LOCAL_TEMP
-
-# 3. Force Python's underlying tempfile module to use this directory globally
 tempfile.tempdir = LOCAL_TEMP
 
-# --- WINDOWS UPLOAD CRASH FIX (NEW & IMPROVED) ---
-# Linux (Docker) allows moving open files, but Windows strictly locks them (WinError 32).
-# We intercept the underlying SpooledTemporaryFile before Gradio/FastAPI imports it.
-_original_spooled = tempfile.SpooledTemporaryFile
+# 3. Keep uploads up to 100MB in RAM instead of writing to disk immediately.
+# This prevents Windows disk locking issues for most ebooks entirely.
+try:
+    import starlette.datastructures
+    starlette.datastructures.UploadFile.spooled_max_size = 100 * 1024 * 1024
+except Exception:
+    pass
 
-class PatchedSpooledTemporaryFile(_original_spooled):
-    def __init__(self, max_size=0, *args, **kwargs):
-        # 1. Keep files up to 100MB entirely in memory (instead of the 1MB default).
-        # This completely avoids writing to the Windows disk during the upload.
-        super().__init__(100 * 1024 * 1024, *args, **kwargs)
-        
-    @property
-    def name(self):
-        # 2. Returning None forces Gradio to safely stream the memory buffer 
-        # instead of trying to do OS-level file moves.
-        return None
+# 4. Windows-Specific Fix: Prevent NamedTemporaryFile from exclusively locking
+_original_named_temp_file = tempfile.NamedTemporaryFile
+def _patched_named_temp_file(*args, **kwargs):
+    # Setting delete=False prevents Windows from throwing WinError 32
+    # when a second process (like Gradio) tries to access the file.
+    if os.name == 'nt':
+        kwargs["delete"] = False
+    return _original_named_temp_file(*args, **kwargs)
 
-tempfile.SpooledTemporaryFile = PatchedSpooledTemporaryFile
+tempfile.NamedTemporaryFile = _patched_named_temp_file
+
+# 5. Aggressive File Move/Rename Patch with Retry Loop
+# Windows Defender or background indexing can briefly lock newly written files.
+# This loop gives the OS a moment to release the file.
+def _retry_on_winerror32(func, src, dst, *args, **kwargs):
+    retries = 5
+    for i in range(retries):
+        try:
+            return func(src, dst, *args, **kwargs)
+        except PermissionError as e:
+            if i == retries - 1:
+                # Final fallback: copy instead of move
+                try:
+                    shutil.copy2(src, dst)
+                    try: os.remove(src)
+                    except: pass
+                    return dst
+                except Exception:
+                    raise e
+            time.sleep(0.5) # Wait 0.5s for Windows to unlock the file
+
+_original_move = shutil.move
+_original_rename = os.rename
+_original_replace = os.replace
+
+shutil.move = lambda src, dst, *args, **kwargs: _retry_on_winerror32(_original_move, src, dst, *args, **kwargs)
+os.rename = lambda src, dst, *args, **kwargs: _retry_on_winerror32(_original_rename, src, dst, *args, **kwargs)
+os.replace = lambda src, dst, *args, **kwargs: _retry_on_winerror32(_original_replace, src, dst, *args, **kwargs)
 
 import re
 import gc
-import time
 import subprocess
-import shutil
 import warnings
 from num2words import num2words
 from decimal import Decimal
+
 
 import gradio as gr
 import numpy as np
