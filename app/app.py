@@ -8,6 +8,7 @@ import gc
 import subprocess
 import warnings
 import starlette.datastructures
+import traceback
 
 # --- 1. THE PINOKIO WATCHER CRASH FIX ---
 # Pinokio watches the current working directory for file changes. If we stream
@@ -65,7 +66,7 @@ import sys
 
 # 1. Force all Python logs to show up in the terminal
 logging.basicConfig(
-    level=logging.INFO, # Change to logging.DEBUG for even more detail
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -75,8 +76,8 @@ import transformers
 transformers.utils.logging.set_verbosity_info()
 
 # 3. If you want to see every single web request Gradio/FastAPI receives:
-logging.getLogger("uvicorn").setLevel(logging.INFO)
-logging.getLogger("fastapi").setLevel(logging.INFO)
+logging.getLogger("torch").setLevel(logging.DEBUG)
+transformers.utils.logging.set_verbosity_debug()
 
 
 # --- OmniVoice Engine Imports ---
@@ -411,6 +412,8 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
             gen_config = OmniVoiceGenerationConfig(num_step=NUM_GENERATION_STEPS, guidance_scale=float(cfg))
             for i, text_chunk in enumerate(text_super_chunks):
                 progress_updater.set_chunk_index(i)
+                print(f"\n[DEBUG] Starting Chunk {i+1}/{num_super_chunks}")
+                print(f"[DEBUG] Text Snippet: {text_chunk[:100]}...")
                 chunk_progress_start = overall_infer_start_frac + (i / num_super_chunks) * (ebook_frac["infer"] / num_ebooks)
                 progress_updater(chunk_progress_start)
                 try:
@@ -490,6 +493,10 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
         progress(1.0, desc=f"All {num_ebooks} eBook(s) processing finished.")
 
     except Exception as e:
+        print("\n" + "="*50)
+        print("CRITICAL ERROR DURING TTS PROCESSING")
+        traceback.print_exc()
+        print("="*50 + "\n")
         raise gr.Error(f"An error occurred: {str(e)}")
 
 DEFAULT_REF_AUDIO_PATH = "default_voice.mp3"
