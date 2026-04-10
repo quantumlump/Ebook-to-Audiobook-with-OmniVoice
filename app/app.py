@@ -14,56 +14,34 @@ os.environ["TMPDIR"] = LOCAL_TEMP
 
 # 3. Force Python's underlying tempfile module to use this directory globally
 tempfile.tempdir = LOCAL_TEMP
+
+# --- WINDOWS UPLOAD CRASH FIX (NEW & IMPROVED) ---
+# Linux (Docker) allows moving open files, but Windows strictly locks them (WinError 32).
+# We intercept the underlying SpooledTemporaryFile before Gradio/FastAPI imports it.
+_original_spooled = tempfile.SpooledTemporaryFile
+
+class PatchedSpooledTemporaryFile(_original_spooled):
+    def __init__(self, max_size=0, *args, **kwargs):
+        # 1. Keep files up to 100MB entirely in memory (instead of the 1MB default).
+        # This completely avoids writing to the Windows disk during the upload.
+        super().__init__(100 * 1024 * 1024, *args, **kwargs)
+        
+    @property
+    def name(self):
+        # 2. Returning None forces Gradio to safely stream the memory buffer 
+        # instead of trying to do OS-level file moves.
+        return None
+
+tempfile.SpooledTemporaryFile = PatchedSpooledTemporaryFile
+
 import re
 import gc
 import time
 import subprocess
 import shutil
-import tempfile
 import warnings
 from num2words import num2words
 from decimal import Decimal
-
-# --- WINDOWS UPLOAD CRASH FIX (FINAL) ---
-# On Windows, FastAPI leaves uploaded files > 1MB open in the background.
-# When Gradio attempts to `shutil.move()` or `os.rename()` these open files,
-# Windows strictly forbids it and throws "PermissionError:[WinError 32]".
-# This patch intercepts the failure and forces a direct file copy instead.
-_original_move = shutil.move
-_original_rename = os.rename
-_original_replace = os.replace
-
-def _fallback_copy(src, dst, original_func, *args, **kwargs):
-    try:
-        return original_func(src, dst, *args, **kwargs)
-    except PermissionError as e:
-        src_str = str(src)
-        dst_str = str(dst)
-        if os.path.isfile(src_str):
-            try:
-                # We can't move the open file, but Windows allows us to copy it!
-                shutil.copy2(src_str, dst_str)
-                try:
-                    os.remove(src_str) # Try to clean up the original
-                except OSError:
-                    pass # If it's still locked, let the OS clean it up later
-                return dst
-            except Exception:
-                raise e # If copy also fails, raise the original error
-        raise e
-
-def _patched_move(src, dst, *args, **kwargs):
-    return _fallback_copy(src, dst, _original_move, *args, **kwargs)
-
-def _patched_rename(src, dst, *args, **kwargs):
-    return _fallback_copy(src, dst, _original_rename, *args, **kwargs)
-
-def _patched_replace(src, dst, *args, **kwargs):
-    return _fallback_copy(src, dst, _original_replace, *args, **kwargs)
-
-shutil.move = _patched_move
-os.rename = _patched_rename
-os.replace = _patched_replace
 
 import gradio as gr
 import numpy as np
