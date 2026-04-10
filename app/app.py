@@ -389,7 +389,7 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
             ebook_start_time = time.time()
             progress_updater = EbookProgressUpdater(progress, num_super_chunks, idx, num_ebooks, ebook_start_time)
 
-            gen_config = OmniVoiceGenerationConfig(num_step=NUM_GENERATION_STEPS)
+            ggen_config = OmniVoiceGenerationConfig(num_step=NUM_GENERATION_STEPS, cfg_scale=float(cfg))
             for i, text_chunk in enumerate(text_super_chunks):
                 progress_updater.set_chunk_index(i)
                 chunk_progress_start = overall_infer_start_frac + (i / num_super_chunks) * (ebook_frac["infer"] / num_ebooks)
@@ -508,13 +508,14 @@ def create_gradio_app():
             ref_text_input = gr.Textbox(label="Reference Text", lines=2, value=DEFAULT_REF_TEXT)
             speed_slider = gr.Slider(label="Speech Speed", minimum=0.3, maximum=2.0, value=1.0, step=0.1)
             num_steps_slider = gr.Slider(label="Generation Steps", minimum=10, maximum=100, value=70, step=1)
+            cfg_slider = gr.Slider(label="CFG Scale (Guidance)", minimum=1.0, maximum=7.0, value=4.0, step=0.1, info="2.0 is recommended for naturalness; 4.0 is punchier.")
             max_phrase_slider = gr.Slider(label="Max Phrase Length", minimum=200, maximum=2000, value=300, step=50)
             max_chunk_slider = gr.Slider(label="Max Chunk Length", minimum=500, maximum=4000, value=800, step=50)
 
         # 1. Target the batch progress to the batch_output component
         generate_btn.click(
             basic_tts,
-            inputs=[ref_audio_input, ref_text_input, gen_file_input, speed_slider, max_phrase_slider, max_chunk_slider, num_steps_slider],
+            inputs=[ref_audio_input, ref_text_input, gen_file_input, speed_slider, max_phrase_slider, max_chunk_slider, num_steps_slider, cfg_slider],
             outputs=[batch_output]
         )
         
