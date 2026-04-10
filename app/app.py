@@ -1,16 +1,14 @@
 import os
 import shutil
 import tempfile
-tempfile.SpooledTemporaryFile.__init__.__defaults__ = (
-    32 * 1024 * 1024,  # 32MB max_size before spilling to disk
-    *tempfile.SpooledTemporaryFile.__init__.__defaults__[1:]
-)
 import time
-import functools
-import builtins
 import io
+import re
+import gc
+import subprocess
+import warnings
 
-# 1. Clean up Gradio's temp folder on startup to prevent bloat
+# --- 1. CLEAN GRADIO TEMP DIRECTORY ---
 LOCAL_TEMP = os.path.abspath(os.path.join(os.getcwd(), "gradio_temp"))
 if os.path.exists(LOCAL_TEMP):
     try:
@@ -18,107 +16,32 @@ if os.path.exists(LOCAL_TEMP):
     except Exception:
         pass
 os.makedirs(LOCAL_TEMP, exist_ok=True)
-
-# 2. Tell Gradio to use this local folder
 os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
 
-# 3. THE DEFINITIVE WINDOWS FILE LOCK PATCH
-# Gradio writes uploads directly to disk. Windows Defender instantly locks 
-# the file for scanning. When Gradio tries to use os.chmod, os.rename, or shutil.move 
-# milliseconds later, it crashes with PermissionError. We intercept these OS-level 
-# file operations and add a 2.0-second retry loop.
+# --- 2. THE DEFINITIVE WINDOWS RAM-SPOOL PATCH ---
+# On Windows, when an uploaded file exceeds ~1MB, Python switches from holding it 
+# in memory to writing a locked temp file to disk. Gradio then crashes trying to access it.
+# We patch SpooledTemporaryFile to hold up to 1GB in memory, completely bypassing the disk!
 
-import starlette.datastructures
+_original_spooled = tempfile.SpooledTemporaryFile
 
-# --- FIX 1: INCREASE SPOOL SIZE ---
-# Prevent Starlette/FastAPI from spooling uploads < 100MB to disk.
-# This prevents it from creating NamedTemporaryFiles entirely for typical eBooks,
-# completely bypassing Windows PermissionError (WinError 32) and making uploads instant!
-starlette.datastructures.UploadFile.spool_max_size = 100 * 1024 * 1024 
+class _PatchedSpooled(_original_spooled):
+    def __init__(self, max_size=0, *args, **kwargs):
+        # Force the RAM limit to 1 Gigabyte instead of 1 Megabyte
+        super().__init__(max_size=1024 * 1024 * 1024, *args, **kwargs)
 
-class SafeWinOSWrapper:
-    def __init__(self, func, ignore_unlink_failure=False):
-        self.func = func
-        self.ignore_unlink_failure = ignore_unlink_failure
-        try:
-            functools.update_wrapper(self, func)
-        except Exception:
-            pass
-        
-    def __call__(self, *args, **kwargs):
-        for i in range(20): # Up to 2 seconds wait for Windows Defender
-            try:
-                return self.func(*args, **kwargs)
-            except PermissionError as e:
-                # WinError 32 = Sharing Violation, WinError 5 = Access Denied
-                if getattr(e, 'winerror', None) in (5, 32):
-                    if i < 19:
-                        time.sleep(0.1)
-                        continue
-                    # If it STILL fails after 2 seconds, it's held by python-multipart.
-                    # For unlinks, we can safely ignore the deletion failure.
-                    if self.ignore_unlink_failure:
-                        return None
-                if self.ignore_unlink_failure:
-                    return None
-                raise
-        return self.func(*args, **kwargs)
+tempfile.SpooledTemporaryFile = _PatchedSpooled
 
-# Apply the patches to all functions Gradio uses during uploads
-os.chmod = SafeWinOSWrapper(os.chmod)
-os.rename = SafeWinOSWrapper(os.rename)
-os.replace = SafeWinOSWrapper(os.replace)
-os.stat = SafeWinOSWrapper(os.stat)
+# We also ensure any NamedTemporaryFiles created by Gradio do not enforce a strict Windows lock.
+_original_named = tempfile.NamedTemporaryFile
 
-# Allow removal/unlink to silently fail if the file is locked by FastAPI
-os.remove = SafeWinOSWrapper(os.remove, ignore_unlink_failure=True)
-os.unlink = SafeWinOSWrapper(os.unlink, ignore_unlink_failure=True)
+def _patched_named(*args, **kwargs):
+    kwargs['delete'] = False
+    return _original_named(*args, **kwargs)
 
-# --- FIX 2: SAFE SHUTIL MOVE ---
-# shutil.move is special. If os.rename fails, it copies the file and then calls os.unlink.
-# Since os.unlink throws WinError 32, it normally crashes AFTER a successful copy.
-original_shutil_move = shutil.move
-
-def safe_shutil_move(src, dst, *args, **kwargs):
-    for i in range(20):
-        try:
-            return original_shutil_move(src, dst, *args, **kwargs)
-        except PermissionError as e:
-            if getattr(e, 'winerror', None) in (5, 32):
-                if i < 19:
-                    time.sleep(0.1)
-                    continue
-                # If we get here, the file is held open.
-                # However, original_shutil_move already successfully copied it before failing on os.unlink.
-                # Let's verify if the destination exists and is fully copied!
-                if os.path.exists(dst):
-                    try:
-                        if os.path.getsize(src) == os.path.getsize(dst):
-                            return dst # Success! Ignore the unlink error.
-                    except Exception:
-                        pass
-                
-                # Final fallback: manually copy it over
-                try:
-                    shutil.copy2(src, dst)
-                    return dst
-                except Exception:
-                    pass
-            raise
-    return original_shutil_move(src, dst, *args, **kwargs)
-
-shutil.move = safe_shutil_move
-
-# Also protect read operations just in case
-builtins.open = SafeWinOSWrapper(builtins.open)
-io.open = SafeWinOSWrapper(io.open)
+tempfile.NamedTemporaryFile = _patched_named
 
 
-import re
-import gc
-import time
-import subprocess
-import warnings
 from num2words import num2words
 from decimal import Decimal
 
