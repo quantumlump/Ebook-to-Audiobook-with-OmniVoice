@@ -315,8 +315,16 @@ def extract_text_and_metadata(file_path):
     return text, title, author, cover_bytes
 
 def sanitize_filename(filename):
+    if not filename:
+        return "unknown_file"
+    # Remove illegal characters
     sanitized = re.sub(r'[\/*?:"<>|\']', "", filename)
-    return sanitized.replace(" ", "_")
+    # Replace spaces with underscores
+    sanitized = sanitized.replace(" ", "_")
+    # CRITICAL: Windows cannot handle folder names ending in a dot or space
+    sanitized = sanitized.strip(". ")
+    # CRITICAL: Limit length to prevent MAX_PATH errors (Windows limit is ~260)
+    return sanitized[:100]
 
 def ensure_directory(directory_path):
     os.makedirs(directory_path, exist_ok=True)
