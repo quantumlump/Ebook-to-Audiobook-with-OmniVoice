@@ -28,14 +28,18 @@ os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
 # milliseconds later, it crashes with PermissionError. We intercept these OS-level 
 # file operations and add a 2.0-second retry loop.
 
+import starlette.datastructures
+
+# --- FIX 1: INCREASE SPOOL SIZE ---
+# Prevent Starlette/FastAPI from spooling uploads < 100MB to disk.
+# This prevents it from creating NamedTemporaryFiles entirely for typical eBooks,
+# completely bypassing Windows PermissionError (WinError 32) and making uploads instant!
+starlette.datastructures.UploadFile.spool_max_size = 100 * 1024 * 1024 
+
 class SafeWinOSWrapper:
-    """
-    A functor is used instead of a standard function to prevent Python's descriptor 
-    protocol from turning these into 'bound methods' when imported by `pathlib`.
-    """
-    def __init__(self, func):
+    def __init__(self, func, ignore_unlink_failure=False):
         self.func = func
-        self.func_name = getattr(func, '__name__', '')
+        self.ignore_unlink_failure = ignore_unlink_failure
         try:
             functools.update_wrapper(self, func)
         except Exception:
@@ -51,52 +55,63 @@ class SafeWinOSWrapper:
                     if i < 19:
                         time.sleep(0.1)
                         continue
-                    
-                    # --- THE FIX FOR GRADIO >1MB UPLOADS ON WINDOWS ---
-                    
-                    # 1. Ignore permission modification and deletion errors on locked files.
-                    # Windows completely forbids chmod/unlink on open FastAPI temp files.
-                    # It is perfectly safe to return None and ignore these.
-                    if self.func_name in ('chmod', 'remove', 'unlink'):
+                    # If it STILL fails after 2 seconds, it's held by python-multipart.
+                    # For unlinks, we can safely ignore the deletion failure.
+                    if self.ignore_unlink_failure:
                         return None
-                        
-                    # 2. Fallback to copying if Gradio is trying to move/rename the open file.
-                    if self.func_name in ('move', 'rename', 'replace'):
-                        src = args[0] if len(args) > 0 else kwargs.get('src')
-                        dst = args[1] if len(args) > 1 else kwargs.get('dst')
-                        
-                        if src and dst:
-                            import shutil
-                            try:
-                                # We MUST use `copyfile` and NOT `copy2` or `copy`. 
-                                # `copyfile` only copies data. `copy2` attempts to copy 
-                                # permissions via chmod, which will instantly crash again.
-                                shutil.copyfile(src, dst)
-                                return dst if self.func_name == 'move' else None
-                            except Exception as fallback_err:
-                                print(f"Fallback copy failed: {fallback_err}")
-                                pass 
-
-                # If it's not a sharing/access violation, or fallback failed, raise normally
+                if self.ignore_unlink_failure:
+                    return None
                 raise
         return self.func(*args, **kwargs)
 
 # Apply the patches to all functions Gradio uses during uploads
-os.chmod = SafeWinOSWrapper(os.chmod)   # <-- This is what was causing the crash!
+os.chmod = SafeWinOSWrapper(os.chmod)
 os.rename = SafeWinOSWrapper(os.rename)
 os.replace = SafeWinOSWrapper(os.replace)
-os.remove = SafeWinOSWrapper(os.remove)
-os.unlink = SafeWinOSWrapper(os.unlink)
 os.stat = SafeWinOSWrapper(os.stat)
-shutil.move = SafeWinOSWrapper(shutil.move)
+
+# Allow removal/unlink to silently fail if the file is locked by FastAPI
+os.remove = SafeWinOSWrapper(os.remove, ignore_unlink_failure=True)
+os.unlink = SafeWinOSWrapper(os.unlink, ignore_unlink_failure=True)
+
+# --- FIX 2: SAFE SHUTIL MOVE ---
+# shutil.move is special. If os.rename fails, it copies the file and then calls os.unlink.
+# Since os.unlink throws WinError 32, it normally crashes AFTER a successful copy.
+original_shutil_move = shutil.move
+
+def safe_shutil_move(src, dst, *args, **kwargs):
+    for i in range(20):
+        try:
+            return original_shutil_move(src, dst, *args, **kwargs)
+        except PermissionError as e:
+            if getattr(e, 'winerror', None) in (5, 32):
+                if i < 19:
+                    time.sleep(0.1)
+                    continue
+                # If we get here, the file is held open.
+                # However, original_shutil_move already successfully copied it before failing on os.unlink.
+                # Let's verify if the destination exists and is fully copied!
+                if os.path.exists(dst):
+                    try:
+                        if os.path.getsize(src) == os.path.getsize(dst):
+                            return dst # Success! Ignore the unlink error.
+                    except Exception:
+                        pass
+                
+                # Final fallback: manually copy it over
+                try:
+                    shutil.copy2(src, dst)
+                    return dst
+                except Exception:
+                    pass
+            raise
+    return original_shutil_move(src, dst, *args, **kwargs)
+
+shutil.move = safe_shutil_move
 
 # Also protect read operations just in case
 builtins.open = SafeWinOSWrapper(builtins.open)
 io.open = SafeWinOSWrapper(io.open)
-
-# (We have completely removed the old SpooledTemporaryFile patch here because 
-# modern Gradio / python-multipart no longer uses it, and it interferes with the pipeline).
-
 
 
 import re
