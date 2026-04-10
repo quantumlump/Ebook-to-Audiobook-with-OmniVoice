@@ -64,9 +64,8 @@ FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 import logging
 import sys
 
-# 1. Force all Python logs to show up in the terminal
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.info,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
