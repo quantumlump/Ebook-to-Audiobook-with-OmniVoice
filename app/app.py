@@ -1,11 +1,9 @@
 import os
 import shutil
 import tempfile
-import time
 
-LOCAL_TEMP = os.path.join(os.getcwd(), "gradio_temp")
-
-# 1. Clean up old temp files from previous runs to prevent bloat
+# 1. Clean up Gradio's temp folder on startup to prevent bloat
+LOCAL_TEMP = os.path.abspath(os.path.join(os.getcwd(), "gradio_temp"))
 if os.path.exists(LOCAL_TEMP):
     try:
         shutil.rmtree(LOCAL_TEMP, ignore_errors=True)
@@ -13,67 +11,40 @@ if os.path.exists(LOCAL_TEMP):
         pass
 os.makedirs(LOCAL_TEMP, exist_ok=True)
 
-# 2. Force all temp files to use this local directory
+# 2. Tell Gradio to use this local folder
 os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
-os.environ["TMP"] = LOCAL_TEMP
-os.environ["TEMP"] = LOCAL_TEMP
-os.environ["TMPDIR"] = LOCAL_TEMP
-tempfile.tempdir = LOCAL_TEMP
 
-# 3. Keep uploads up to 100MB in RAM instead of writing to disk immediately.
-# This prevents Windows disk locking issues for most ebooks entirely.
-try:
-    import starlette.datastructures
-    starlette.datastructures.UploadFile.spooled_max_size = 100 * 1024 * 1024
-except Exception:
-    pass
+# 3. ABSOLUTE FIX FOR WINDOWS UPLOAD CRASHES (WinError 32)
+# The Gradio backend (Starlette) hardcodes a 1MB limit for uploads.
+# Anything > 1MB gets dumped to the hard drive mid-upload. On Windows, 
+# antivirus (Defender) instantly scans new files, locking them. 
+# When Gradio tries to read it milliseconds later, it gets Permission Denied and crashes.
+# We intercept Python's temporary file creator and force a 1GB limit, 
+# keeping the eBook safely in RAM during the upload process.
+_original_spooled = tempfile.SpooledTemporaryFile
 
-# 4. Windows-Specific Fix: Prevent NamedTemporaryFile from exclusively locking
-_original_named_temp_file = tempfile.NamedTemporaryFile
-def _patched_named_temp_file(*args, **kwargs):
-    # Setting delete=False prevents Windows from throwing WinError 32
-    # when a second process (like Gradio) tries to access the file.
-    if os.name == 'nt':
-        kwargs["delete"] = False
-    return _original_named_temp_file(*args, **kwargs)
+class PatchedSpooledTemporaryFile(_original_spooled):
+    def __init__(self, *args, **kwargs):
+        # Override max_size to 1GB (1024 * 1024 * 1024 bytes) regardless of what Starlette asks for
+        if 'max_size' in kwargs:
+            kwargs['max_size'] = 1024 * 1024 * 1024
+        elif len(args) > 0:
+            args = (1024 * 1024 * 1024,) + args[1:]
+        else:
+            kwargs['max_size'] = 1024 * 1024 * 1024
+        super().__init__(*args, **kwargs)
 
-tempfile.NamedTemporaryFile = _patched_named_temp_file
+tempfile.SpooledTemporaryFile = PatchedSpooledTemporaryFile
 
-# 5. Aggressive File Move/Rename Patch with Retry Loop
-# Windows Defender or background indexing can briefly lock newly written files.
-# This loop gives the OS a moment to release the file.
-def _retry_on_winerror32(func, src, dst, *args, **kwargs):
-    retries = 5
-    for i in range(retries):
-        try:
-            return func(src, dst, *args, **kwargs)
-        except PermissionError as e:
-            if i == retries - 1:
-                # Final fallback: copy instead of move
-                try:
-                    shutil.copy2(src, dst)
-                    try: os.remove(src)
-                    except: pass
-                    return dst
-                except Exception:
-                    raise e
-            time.sleep(0.5) # Wait 0.5s for Windows to unlock the file
 
-_original_move = shutil.move
-_original_rename = os.rename
-_original_replace = os.replace
-
-shutil.move = lambda src, dst, *args, **kwargs: _retry_on_winerror32(_original_move, src, dst, *args, **kwargs)
-os.rename = lambda src, dst, *args, **kwargs: _retry_on_winerror32(_original_rename, src, dst, *args, **kwargs)
-os.replace = lambda src, dst, *args, **kwargs: _retry_on_winerror32(_original_replace, src, dst, *args, **kwargs)
-
+# --- Standard Imports Start Here ---
 import re
 import gc
+import time
 import subprocess
 import warnings
 from num2words import num2words
 from decimal import Decimal
-
 
 import gradio as gr
 import numpy as np
