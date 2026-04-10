@@ -3,7 +3,6 @@ import shutil
 import tempfile
 import time
 import functools
-import pathlib
 import builtins
 import io
 
@@ -19,74 +18,53 @@ os.makedirs(LOCAL_TEMP, exist_ok=True)
 # 2. Tell Gradio to use this local folder
 os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
 
-# 3. THE ULTIMATE WINERROR 32 PATCH
-# Gradio 4 streams large uploads directly to disk. When the upload finishes, 
-# Windows Defender instantly locks the file for scanning. Gradio immediately 
-# uses pathlib or shutil to move/rename/read the file, resulting in WinError 32. 
-# We intercept ALL file operations and add a 3.0-second retry loop.
+# 3. THE DEFINITIVE WINDOWS FILE LOCK PATCH
+# Gradio writes uploads directly to disk. Windows Defender instantly locks 
+# the file for scanning. When Gradio tries to use os.chmod, os.rename, or shutil.move 
+# milliseconds later, it crashes with PermissionError. We intercept these OS-level 
+# file operations and add a 2.0-second retry loop.
 
-def _retry_on_winerror32(func, *args, **kwargs):
-    retries = 30  # Up to 3.0 seconds wait for Defender to finish
-    for i in range(retries):
-        try:
-            return func(*args, **kwargs)
-        except PermissionError as e:
-            # WinError 32 = ERROR_SHARING_VIOLATION (file is locked)
-            if getattr(e, 'winerror', None) == 32:
-                if i < retries - 1:
-                    time.sleep(0.1) # Wait 100ms and try again
-                    continue
-            raise
-
-class WinError32RetryWrapper:
+class SafeWinOSWrapper:
+    """
+    A functor is used instead of a standard function to prevent Python's descriptor 
+    protocol from turning these into 'bound methods' when imported by `pathlib`.
+    """
     def __init__(self, func):
         self.func = func
-        functools.update_wrapper(self, func)
+        try:
+            functools.update_wrapper(self, func)
+        except Exception:
+            pass
+        
     def __call__(self, *args, **kwargs):
-        return _retry_on_winerror32(self.func, *args, **kwargs)
+        for i in range(20): # Up to 2 seconds wait for Windows Defender
+            try:
+                return self.func(*args, **kwargs)
+            except PermissionError as e:
+                # WinError 32 = Sharing Violation, WinError 5 = Access Denied
+                if getattr(e, 'winerror', None) in (5, 32):
+                    if i < 19:
+                        time.sleep(0.1)
+                        continue
+                raise
+        return self.func(*args, **kwargs)
 
-# A. Patch core OS functions
-os.rename = WinError32RetryWrapper(os.rename)
-os.replace = WinError32RetryWrapper(os.replace)
-os.remove = WinError32RetryWrapper(os.remove)
-os.unlink = WinError32RetryWrapper(os.unlink)
+# Apply the patches to all functions Gradio uses during uploads
+os.chmod = SafeWinOSWrapper(os.chmod)   # <-- This is what was causing the crash!
+os.rename = SafeWinOSWrapper(os.rename)
+os.replace = SafeWinOSWrapper(os.replace)
+os.remove = SafeWinOSWrapper(os.remove)
+os.unlink = SafeWinOSWrapper(os.unlink)
+os.stat = SafeWinOSWrapper(os.stat)
+shutil.move = SafeWinOSWrapper(shutil.move)
 
-# B. Patch Shutil functions
-shutil.move = WinError32RetryWrapper(shutil.move)
-shutil.copy = WinError32RetryWrapper(shutil.copy)
-shutil.copy2 = WinError32RetryWrapper(shutil.copy2)
-shutil.copyfile = WinError32RetryWrapper(shutil.copyfile)
+# Also protect read operations just in case
+builtins.open = SafeWinOSWrapper(builtins.open)
+io.open = SafeWinOSWrapper(io.open)
 
-# C. Patch Pathlib operations (Gradio 4 heavily uses these, bypassing os.*)
-_orig_path_rename = pathlib.Path.rename
-_orig_path_replace = pathlib.Path.replace
-_orig_path_unlink = pathlib.Path.unlink
+# (We have completely removed the old SpooledTemporaryFile patch here because 
+# modern Gradio / python-multipart no longer uses it, and it interferes with the pipeline).
 
-def _patched_path_rename(self, target): return _retry_on_winerror32(_orig_path_rename, self, target)
-def _patched_path_replace(self, target): return _retry_on_winerror32(_orig_path_replace, self, target)
-def _patched_path_unlink(self, missing_ok=False): 
-    try: return _retry_on_winerror32(_orig_path_unlink, self, missing_ok=missing_ok)
-    except TypeError: return _retry_on_winerror32(_orig_path_unlink, self) # Fallback for old Pythons
-
-pathlib.Path.rename = _patched_path_rename
-pathlib.Path.replace = _patched_path_replace
-pathlib.Path.unlink = _patched_path_unlink
-
-# D. Patch builtins.open (In case Gradio tries to read the file while it's locked)
-_orig_open = builtins.open
-def _patched_open(*args, **kwargs): return _retry_on_winerror32(_orig_open, *args, **kwargs)
-builtins.open = _patched_open
-io.open = _patched_open
-
-# E. Keep the SpooledTemporaryFile patch for Starlette fallbacks
-_original_spooled = tempfile.SpooledTemporaryFile
-class PatchedSpooledTemporaryFile(_original_spooled):
-    def __init__(self, *args, **kwargs):
-        if 'max_size' in kwargs: kwargs['max_size'] = 1024 * 1024 * 1024
-        elif len(args) > 0: args = (1024 * 1024 * 1024,) + args[1:]
-        else: kwargs['max_size'] = 1024 * 1024 * 1024
-        super().__init__(*args, **kwargs)
-tempfile.SpooledTemporaryFile = PatchedSpooledTemporaryFile
 
 
 import re
