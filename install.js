@@ -1,5 +1,5 @@
 module.exports = {
-  run: [
+  run:[
     {
       method: "shell.run",
       params: {
@@ -27,5 +27,18 @@ module.exports = {
         },
       },
     },
+    // NEW STEP: Pre-download model weights and NLTK data during installation
+    {
+      method: "shell.run",
+      params: {
+        venv: "env",
+        path: ".",
+        env: {
+          // This forces the model to save INSIDE the app folder rather than your main C: drive
+          HF_HOME: "hf_cache" 
+        },
+        message: "python -c \"import nltk; nltk.download('punkt'); nltk.download('punkt_tab'); from omnivoice import OmniVoice; OmniVoice.from_pretrained('k2-fsa/OmniVoice', load_asr=True)\""
+      }
+    }
   ],
 }
