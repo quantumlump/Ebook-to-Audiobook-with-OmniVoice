@@ -428,7 +428,7 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
                 try:
                     with torch.no_grad():
                         audio_tensor = model.generate(text=text_chunk, voice_clone_prompt=voice_clone_prompt, speed=float(speed), generation_config=gen_config)
-                    wave_chunk = audio_tensor[0].squeeze(0).cpu().numpy()
+                    wave_chunk = audio_tensor[0].cpu().numpy().flatten()
                     if wave_chunk is not None and wave_chunk.any():
                         chunk_path = os.path.join(temp_chunks_dir, f"chunk_{i:04d}.wav")
                         sf.write(chunk_path, wave_chunk, sampling_rate)
