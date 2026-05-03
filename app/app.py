@@ -180,30 +180,55 @@ def clean_and_normalize_text(raw_text: str) -> str:
     text = re.sub(r'#(\d)', r'number \1', text)     
     text = re.sub(r'#([a-zA-Z])', r'hashtag \1', text) 
     text = text.replace('#', ' pound ')               
+    
+    # --- UPDATED CURRENCY REPLACER ---
     def currency_replacer(match):
         symbol = match.group(1)
         amount = match.group(2)
+        multiplier = match.group(3) # Captures million, billion, etc.
+        
         mapping = {'$': 'dollar', '£': 'pound', '€': 'euro', '¥': 'yen'}
         curr_name = mapping.get(symbol, 'dollars')
-        if amount != "1": curr_name += "s"
-        return f"{amount} {curr_name}"
-    text = re.sub(r'([$£€¥])(\d+(?:\.\d{2})?)', currency_replacer, text)
+        
+        # Make currency plural if amount is not exactly "1" or if a multiplier exists
+        if amount != "1" or multiplier: 
+            curr_name += "s"
+            
+        if multiplier:
+            return f"{amount} {multiplier} {curr_name}"
+        else:
+            return f"{amount} {curr_name}"
+
+    # Updated regex: captures commas, any-length decimals, and optional multipliers
+    text = re.sub(r'([$£€¥])(\d+(?:,\d{3})*(?:\.\d+)?)(?:\s*(million|billion|trillion|thousand|hundred)\b)?', currency_replacer, text, flags=re.IGNORECASE)
+    # ---------------------------------
+
     symbol_map = {'—': ', ', '–': ', ', '&': ' and ', '%': ' percent ', '@': ' at ', 'µm': ' micrometers ', '°': ' degrees ', '+': ' plus ', '=': ' equals ', '/': ' or '}
     for old, new in symbol_map.items(): text = text.replace(old, new)
+    
     text = re.sub(r'\bSt\.\s+(?=[A-Z])', 'Saint ', text)
     text = re.sub(r'(?<=\d)\s*St\.\b', ' Street', text, flags=re.IGNORECASE)
     text = re.sub(r'(?<=[A-Z][a-z])\s+St\.\b', ' Street', text)
+    
     safe_abbreviations = {"Mr.": "Mister", "Mrs.": "Missus", "Ms.": "Miss", "Dr.": "Doctor", "Prof.": "Professor", "Rev.": "Reverend", "Hon.": "Honorable", "Jr.": "Junior", "Sr.": "Senior", "Gen.": "General", "Adm.": "Admiral", "Capt.": "Captain", "Cmdr.": "Commander", "Lt.": "Lieutenant", "Sgt.": "Sergeant", "Co.": "Company", "Corp.": "Corporation", "Inc.": "Incorporated", "Ltd.": "Limited", "LLC": "Limited Liability Company", "vs.": "versus", "et al.": "et alia", "etc.": "et cetera", "e.g.": "for example", "i.e.": "that is", "Ph.D.": "Doctor of Philosophy", "M.A.": "Master of Arts", "B.A.": "Bachelor of Arts", "pp.": "pages", "vol.": "volume", "U.S.": "United States", "U.S.A.": "United States of America", "U.K.": "United Kingdom", "E.U.": "European Union", "Ave.": "Avenue", "Blvd.": "Boulevard", "Rd.": "Road", "sq.": "square", "cu.": "cubic", "deg.": "degrees", "A.M.": "ay em", "P.M.": "pee em", "Jan.": "January", "Feb.": "February", "Mar.": "March", "Apr.": "April", "Jun.": "June", "Jul.": "July", "Aug.": "August", "Sep.": "September", "Oct.": "October", "Nov.": "November", "Dec.": "December", "approx.": "approximately", "dept.": "department", "apt.": "apartment", "est.": "established"}
-    unit_abbreviations = {"mm": "millimeters", "cm": "centimeters", "m": "meters", "km": "kilometers", "mg": "milligrams", "g": "grams", "kg": "kilograms", "in": "inches", "ft": "feet", "yd": "yards", "mi": "miles", "oz": "ounces", "lb": "pounds", "lbs": "pounds", "mph": "miles per hour", "kph": "kilometers per hour"}
+    
+    # --- UPDATED UNIT ABBREVIATIONS ---
+    # Removed '"in": "inches"' to stop falsely matching the standard preposition "in".
+    unit_abbreviations = {"mm": "millimeters", "cm": "centimeters", "m": "meters", "km": "kilometers", "mg": "milligrams", "g": "grams", "kg": "kilograms", "ft": "feet", "yd": "yards", "mi": "miles", "oz": "ounces", "lb": "pounds", "lbs": "pounds", "mph": "miles per hour", "kph": "kilometers per hour"}
+    # ----------------------------------
+    
     for abbr, full in unit_abbreviations.items(): text = re.sub(rf'(?<=\d)\s*{re.escape(abbr)}\b', f' {full}', text, flags=re.IGNORECASE)
     for abbr, full in safe_abbreviations.items(): text = re.sub(r'\b' + re.escape(abbr) + r'(?!\w)', full, text, flags=re.IGNORECASE)
+    
     problematic_abbreviations = {"N.": "North", "S.": "South", "E.": "East", "W.": "West", "p.": "page"}
     for abbr, full in problematic_abbreviations.items(): text = re.sub(r'(^|\s)' + re.escape(abbr) + r'(?!\w)', r'\1' + full, text, flags=re.IGNORECASE)
+    
     cleaned_text = convert_numbers_to_words(text)
     cleaned_text = cleaned_text.replace('…', '.')
     cleaned_text = cleaned_text.replace('"', ' ').replace('“', ' ').replace('”', ' ')
     cleaned_text = cleaned_text.replace('()', '').replace('( )', '')
     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+    
     return cleaned_text
 
 # --- Extractors (Updated for Covers & Metadata) ---
