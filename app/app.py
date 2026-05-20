@@ -9,12 +9,9 @@ import subprocess
 import warnings
 import starlette.datastructures
 import traceback
+import uuid
 
 # --- 1. THE PINOKIO WATCHER CRASH FIX ---
-# Pinokio watches the current working directory for file changes. If we stream
-# a large upload to a local temp folder, it triggers hundreds of rapid file events,
-# instantly overloading and crashing Pinokio on Windows.
-# FIX: Move Gradio's temp folder OUTSIDE the Pinokio workspace to the Windows system temp folder.
 SYSTEM_TEMP = tempfile.gettempdir()
 LOCAL_TEMP = os.path.join(SYSTEM_TEMP, "omnivoice_gradio_temp")
 
@@ -27,9 +24,6 @@ os.makedirs(LOCAL_TEMP, exist_ok=True)
 os.environ["GRADIO_TEMP_DIR"] = LOCAL_TEMP
 
 # --- 2. THE FASTAPI RAM SPOOL FIX ---
-# Prevent FastAPI from spooling uploads < 100MB to disk at all.
-# This keeps the eBook entirely in RAM during upload, completely bypassing 
-# Windows disk locks and file-watcher events, making the upload instant!
 starlette.datastructures.UploadFile.spool_max_size = 100 * 1024 * 1024 
 
 
@@ -51,8 +45,11 @@ try:
     nltk.data.find('tokenizers/punkt_tab')
 except LookupError:
     print("Downloading required NLTK tokenizers...")
-    nltk.download('punkt')
-    nltk.download('punkt_tab')
+    try:
+        nltk.download('punkt', quiet=True)
+        nltk.download('punkt_tab', quiet=True)
+    except Exception as e:
+        print(f"NLTK download warning: {e}. If offline, ensure punkt is pre-installed.")
 
 # --- Zero Dependency Extractors & Tools ---
 import fitz  # PyMuPDF
@@ -72,11 +69,9 @@ logging.basicConfig(
 
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
-# 2. Specifically force Transformers and Gradio to stop being quiet
 import transformers
 transformers.utils.logging.set_verbosity_info()
 
-# 3. If you want to see every single web request Gradio/FastAPI receives:
 logging.getLogger("torch").setLevel(logging.DEBUG)
 transformers.utils.logging.set_verbosity_debug()
 
@@ -169,6 +164,65 @@ def strip_footnotes(text: str) -> str:
     text = re.sub(r' {2,}', ' ', text)
     return text.strip()
 
+
+# --- SAFER CONTEXT-AWARE ABBREVIATION DISAMBIGUATORS ---
+
+def disambiguate_gravity(text: str) -> str:
+    # 1. Match obvious plurals "gs", "Gs", "g's", "G's" directly after digits (e.g. 3gs, 3 G's).
+    # grams is almost never written as "gs" in book literature, making this highly reliable.
+    text = re.sub(r'\b(\d+(?:\.\d+)?)\s*(?:gs|Gs|g\'s|G\'s)\b', r'\1 Gs', text)
+    
+    # 2. Match case-sensitive uppercase "G" (e.g. 3G, 3 G).
+    # If a cellular network context is detected (e.g. "5G network"), leave it as 'G' so TTS reads "five gee".
+    # Otherwise, convert to gravity "Gs" (pronounced "gees").
+    def uppercase_g_replacer(match):
+        num = match.group(1)
+        following_text = text[match.end():match.end()+40].lower()
+        network_words = ["network", "cellular", "tower", "data", "phone", "signal", "lte", "wifi", "tech", "generation"]
+        if any(word in following_text for word in network_words):
+            return f"{num} G"
+        return f"{num} Gs"
+        
+    text = re.sub(r'\b(\d+(?:\.\d+)?)\s*G\b', uppercase_g_replacer, text)
+    
+    # 3. Match lowercase "g" contextually.
+    # Search for surrounding context verbs or descriptors relating to physics/acceleration.
+    gravity_verbs = ["pull", "sustained", "experience", "gravity", "accelerat", "withstand", "turn", "maneuver", "burn", "thrust", "force", "vector", "pilot"]
+    
+    def lowercase_g_replacer(match):
+        num = match.group(1)
+        start_pos = max(0, match.start() - 60)
+        end_pos = min(len(text), match.end() + 60)
+        context = text[start_pos:end_pos].lower()
+        
+        # If standard aviation/science-fiction words are nearby, convert to gravity "Gs"
+        if any(verb in context for verb in gravity_verbs):
+            return f"{num} Gs"
+        # Otherwise default to standard grams weight units
+        return f"{num} grams"
+        
+    text = re.sub(r'\b(\d+(?:\.\d+)?)\s*g\b', lowercase_g_replacer, text)
+    return text
+
+def disambiguate_meters_and_million(text: str) -> str:
+    # Help isolate lowercase "m" (meters) from "M" / "m" (million shorthand)
+    million_nouns = ["copies", "views", "users", "people", "subscribers", "dollars", "pounds", "euros", "yen", "members", "citizens", "inhabitants"]
+    
+    def m_replacer(match):
+        num = match.group(1)
+        unit = match.group(2)
+        following_text = text[match.end():match.end()+40].lower()
+        
+        if any(noun in following_text for noun in million_nouns):
+            return f"{num} million"
+        if unit == 'M':
+            return f"{num} million"
+        return f"{num} meters" # Default lowercase 'm' to meters in narrative prose
+        
+    text = re.sub(r'\b(\d+(?:\.\d+)?)\s*(m|M)\b', m_replacer, text)
+    return text
+
+
 def clean_and_normalize_text(raw_text: str) -> str:
     text = raw_text
     text = re.sub(r'\*\s*\d+\b', '', text) 
@@ -181,14 +235,19 @@ def clean_and_normalize_text(raw_text: str) -> str:
     text = re.sub(r'#([a-zA-Z])', r'hashtag \1', text) 
     text = text.replace('#', ' pound ')               
     
-    # --- UPDATED CURRENCY REPLACER ---
+    # --- UPDATED CURRENCY REPLACER (With Shorthand m/M, b/B, k/K Support) ---
     def currency_replacer(match):
         symbol = match.group(1)
         amount = match.group(2)
-        multiplier = match.group(3) # Captures million, billion, etc.
+        multiplier = match.group(3) 
         
         mapping = {'$': 'dollar', '£': 'pound', '€': 'euro', '¥': 'yen'}
         curr_name = mapping.get(symbol, 'dollars')
+        
+        if multiplier:
+            multiplier = multiplier.lower().strip()
+            shorthand_map = {'m': 'million', 'b': 'billion', 'k': 'thousand'}
+            multiplier = shorthand_map.get(multiplier, multiplier)
         
         # Make currency plural if amount is not exactly "1" or if a multiplier exists
         if amount != "1" or multiplier: 
@@ -199,8 +258,9 @@ def clean_and_normalize_text(raw_text: str) -> str:
         else:
             return f"{amount} {curr_name}"
 
-    # Updated regex: captures commas, any-length decimals, and optional multipliers
-    text = re.sub(r'([$£€¥])(\d+(?:,\d{3})*(?:\.\d+)?)(?:\s*(million|billion|trillion|thousand|hundred)\b)?', currency_replacer, text, flags=re.IGNORECASE)
+    # Captures shorthand suffixes explicitly alongside full words ($5m, $50k)
+    currency_pattern = r'([$£€¥])(\d+(?:,\d{3})*(?:\.\d+)?)\s*(m\b|M\b|b\b|B\b|k\b|K\b|million|billion|trillion|thousand|hundred)?'
+    text = re.sub(currency_pattern, currency_replacer, text)
     # ---------------------------------
 
     symbol_map = {'—': ', ', '–': ', ', '&': ' and ', '%': ' percent ', '@': ' at ', 'µm': ' micrometers ', '°': ' degrees ', '+': ' plus ', '=': ' equals ', '/': ' or '}
@@ -212,16 +272,29 @@ def clean_and_normalize_text(raw_text: str) -> str:
     
     safe_abbreviations = {"Mr.": "Mister", "Mrs.": "Missus", "Ms.": "Miss", "Dr.": "Doctor", "Prof.": "Professor", "Rev.": "Reverend", "Hon.": "Honorable", "Jr.": "Junior", "Sr.": "Senior", "Gen.": "General", "Adm.": "Admiral", "Capt.": "Captain", "Cmdr.": "Commander", "Lt.": "Lieutenant", "Sgt.": "Sergeant", "Co.": "Company", "Corp.": "Corporation", "Inc.": "Incorporated", "Ltd.": "Limited", "LLC": "Limited Liability Company", "vs.": "versus", "et al.": "et alia", "etc.": "et cetera", "e.g.": "for example", "i.e.": "that is", "Ph.D.": "Doctor of Philosophy", "M.A.": "Master of Arts", "B.A.": "Bachelor of Arts", "pp.": "pages", "vol.": "volume", "U.S.": "United States", "U.S.A.": "United States of America", "U.K.": "United Kingdom", "E.U.": "European Union", "Ave.": "Avenue", "Blvd.": "Boulevard", "Rd.": "Road", "sq.": "square", "cu.": "cubic", "deg.": "degrees", "A.M.": "ay em", "P.M.": "pee em", "Jan.": "January", "Feb.": "February", "Mar.": "March", "Apr.": "April", "Jun.": "June", "Jul.": "July", "Aug.": "August", "Sep.": "September", "Oct.": "October", "Nov.": "November", "Dec.": "December", "approx.": "approximately", "dept.": "department", "apt.": "apartment", "est.": "established"}
     
-    # --- UPDATED UNIT ABBREVIATIONS ---
-    # Removed '"in": "inches"' to stop falsely matching the standard preposition "in".
-    unit_abbreviations = {"mm": "millimeters", "cm": "centimeters", "m": "meters", "km": "kilometers", "mg": "milligrams", "g": "grams", "kg": "kilograms", "ft": "feet", "yd": "yards", "mi": "miles", "oz": "ounces", "lb": "pounds", "lbs": "pounds", "mph": "miles per hour", "kph": "kilometers per hour"}
+    # --- CONTEXT DISAMBIGUATORS ---
+    text = disambiguate_gravity(text)
+    text = disambiguate_meters_and_million(text)
+    
+    # --- GENERAL UNIT ABBREVIATIONS (Removed 'g' and 'm' to avoid collisions) ---
+    unit_abbreviations = {
+        "mm": "millimeters", "cm": "centimeters", "km": "kilometers", 
+        "mg": "milligrams", "kg": "kilograms", "ft": "feet", "yd": "yards", 
+        "mi": "miles", "oz": "ounces", "lb": "pounds", "lbs": "pounds", 
+        "mph": "miles per hour", "kph": "kilometers per hour"
+    }
+    for abbr, full in unit_abbreviations.items(): 
+        text = re.sub(rf'(?<=\d)\s*{re.escape(abbr)}\b', f' {full}', text, flags=re.IGNORECASE)
     # ----------------------------------
     
-    for abbr, full in unit_abbreviations.items(): text = re.sub(rf'(?<=\d)\s*{re.escape(abbr)}\b', f' {full}', text, flags=re.IGNORECASE)
-    for abbr, full in safe_abbreviations.items(): text = re.sub(r'\b' + re.escape(abbr) + r'(?!\w)', full, text, flags=re.IGNORECASE)
+    for abbr, full in safe_abbreviations.items(): 
+        text = re.sub(r'\b' + re.escape(abbr) + r'(?!\w)', full, text, flags=re.IGNORECASE)
     
-    problematic_abbreviations = {"N.": "North", "S.": "South", "E.": "East", "W.": "West", "p.": "page"}
-    for abbr, full in problematic_abbreviations.items(): text = re.sub(r'(^|\s)' + re.escape(abbr) + r'(?!\w)', r'\1' + full, text, flags=re.IGNORECASE)
+    # --- SAFER DIRECTION / REFERENCE NORMALIZERS ---
+    # Removed N., S., E., W. entirely. Keeping them globally causes initials (like E. G. Smith) to read as "East".
+    # Only replace "p." to "page" if it matches standard page citation structures (e.g. p. 120)
+    text = re.sub(r'\bp\.\s*(\d+)\b', r'page \1', text, flags=re.IGNORECASE)
+    # -----------------------------------------------
     
     cleaned_text = convert_numbers_to_words(text)
     cleaned_text = cleaned_text.replace('…', '.')
@@ -343,26 +416,25 @@ def extract_text_and_metadata(file_path):
 def sanitize_filename(filename):
     if not filename:
         return "unknown_file"
-    # Remove illegal Windows characters
     sanitized = re.sub(r'[\/*?:"<>|\']', "", filename)
-    # Replace spaces with underscores
     sanitized = sanitized.replace(" ", "_")
-    # IMPORTANT: Windows cannot handle folder names ending in a dot or space
     sanitized = sanitized.strip(". ")
-    # Limit length to 100 chars to avoid "Path too long" errors
     return sanitized[:100]
 
 def ensure_directory(directory_path):
     os.makedirs(directory_path, exist_ok=True)
 
 def show_converted_audiobooks():
-    # Use absolute paths so Gradio can reliably serve the downloads
     output_dir = os.path.abspath(os.path.join("Working_files", "Book"))
     if not os.path.exists(output_dir): return []
     files =[os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith(('.mp3', '.m4b'))]
     return files if files else[]
 
 def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase_length, max_chunk_length, num_steps, cfg, progress=gr.Progress()):
+    # Safety Guard Clause to prevent crash if run with empty book inputs
+    if not gen_file_input:
+        raise gr.Error("Please upload at least one eBook file to generate audio!")
+
     try:
         processed_audiobooks =[]
         num_ebooks = len(gen_file_input)
@@ -392,7 +464,6 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
 
             progress(current_ebook_base_progress, desc=f"Ebook {idx+1}/{num_ebooks}: Extracting text...")
             try:
-                # Includes cover bytes and robust metadata mapping
                 gen_text, ebook_title, ebook_author, cover_bytes = extract_text_and_metadata(original_ebook_path)
             except Exception as e:
                 print(f"Extraction error: {e}")
@@ -401,7 +472,13 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
             progress_offset_within_ebook += ebook_frac["extract_text"]
             
             overall_infer_start_frac = current_ebook_base_progress + (progress_offset_within_ebook / num_ebooks)
-            temp_chunks_dir = os.path.abspath(os.path.join("Working_files", "temp_audio_chunks", sanitize_filename(ebook_title)))
+            
+            # UNIQUE DIRECTORY ASSIGNMENT: Appends uuid prefix to prevent multi-user collisions
+            run_uuid = uuid.uuid4().hex[:8]
+            temp_chunks_dir = os.path.abspath(os.path.join(
+                "Working_files", "temp_audio_chunks", 
+                f"{sanitize_filename(ebook_title)}_{run_uuid}"
+            ))
             ensure_directory(temp_chunks_dir)
             chunk_file_paths =[]
 
@@ -482,10 +559,8 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
 
                 ensure_directory(final_mp3_dir)
                 
-                # Base FFmpeg command
                 ffmpeg_command =[FFMPEG_EXE, '-f', 'concat', '-safe', '0', '-i', 'concat_list.txt']
                 
-                # Handling Cover Image Output map for MP3 tagging
                 has_cover = False
                 cover_path = os.path.join(temp_chunks_dir, "cover.jpg")
                 if cover_bytes:
@@ -497,7 +572,6 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
                         print(f"Failed to write cover image: {e}")
                 
                 if has_cover:
-                    # Map the audio array [0:a] and the image [1:v] so it embeds the image
                     ffmpeg_command.extend([
                         '-i', 'cover.jpg',
                         '-map', '0:a',
@@ -506,22 +580,20 @@ def basic_tts(ref_audio_input, ref_text_input, gen_file_input, speed, max_phrase
                         '-disposition:v', 'attached_pic'
                     ])
                 
-                # Add Author/Title/Album Metadata explicitly 
                 ffmpeg_command.extend([
                     '-c:a', 'libmp3lame', 
                     '-b:a', '192k', 
                     '-id3v2_version', '3', 
                     '-metadata', f'title={ebook_title}', 
-                    '-metadata', f'artist={ebook_author}',   # Audiobooks use "artist" for Authors
-                    '-metadata', f'album={ebook_title}',     # Treat the entire book as an Album
+                    '-metadata', f'artist={ebook_author}',   
+                    '-metadata', f'album={ebook_title}',     
                     '-y', os.path.abspath(final_mp3_path)
                 ])
 
                 subprocess.run(ffmpeg_command, cwd=temp_chunks_dir, check=True)
                 
-                # --- ADD TO LIST AND YIELD IMMEDIATELY ---
                 processed_audiobooks.append(final_mp3_path)
-                yield processed_audiobooks # THIS MAKES THE DOWNLOAD APPEAR NOW
+                yield processed_audiobooks 
                 
             except Exception as e:
                 print(f"FFmpeg error: {e}")
@@ -576,22 +648,28 @@ def create_gradio_app():
             max_phrase_slider = gr.Slider(label="Max Phrase Length", minimum=200, maximum=2000, value=300, step=50)
             max_chunk_slider = gr.Slider(label="Max Chunk Length", minimum=500, maximum=4000, value=800, step=50)
 
-        # 1. Target the batch progress to the batch_output component
+        # 1. Run basic_tts and yield files to batch_output.
+        # 2. Chain .then() to automatically trigger a library reload when the batch completes.
         generate_btn.click(
             basic_tts,
             inputs=[ref_audio_input, ref_text_input, gen_file_input, speed_slider, max_phrase_slider, max_chunk_slider, num_steps_slider, cfg_slider],
             outputs=[batch_output]
+        ).then(
+            show_converted_audiobooks,
+            inputs=[],
+            outputs=[library_output],
+            queue=False
         )
         
-        # 2. Target the refresh button to the entirely separate library_output component
+        # Manual Refresh Target
         show_audiobooks_btn.click(
             show_converted_audiobooks, 
             inputs=[], 
             outputs=[library_output],
-            queue=False  # <--- ADD THIS TO BYPASS THE QUEUE
+            queue=False  
         )
         
-        # Optional Bonus: Automatically load previously completed books when the web page is opened!
+        # Automatically load previously completed books on page load
         app.load(show_converted_audiobooks, inputs=[], outputs=[library_output], queue=False)
         
     return app
