@@ -224,7 +224,65 @@ def disambiguate_meters_and_million(text: str) -> str:
 
 
 def clean_and_normalize_text(raw_text: str) -> str:
+    # --- NESTED HIGH-PRIORITY TIME NORMALIZER ---
+    def normalize_times(t_text: str) -> str:
+        # Pattern 1: Colon-separated times, e.g., 2:00 P.M., 10:30 am, 12:05
+        time_colon_pattern = r'\b(\d{1,2}):(\d{2})\s*(a\.m\.(?!\w)|p\.m\.(?!\w)|am\b|pm\b)?'
+        
+        def time_colon_replacer(match):
+            hours = int(match.group(1))
+            minutes = int(match.group(2))
+            suffix = match.group(3)
+            
+            if hours < 1 or hours > 24 or minutes < 0 or minutes > 59:
+                return match.group(0)
+            
+            hours_word = num2words(hours)
+            
+            if minutes == 0:
+                minutes_word = "o'clock"
+            elif minutes < 10:
+                minutes_word = f"oh {num2words(minutes)}"
+            else:
+                minutes_word = num2words(minutes)
+                
+            suffix_word = ""
+            if suffix:
+                clean_suffix = suffix.lower().replace(".", "").strip()
+                if clean_suffix == "am":
+                    suffix_word = " ay em"
+                elif clean_suffix == "pm":
+                    suffix_word = " pee em"
+            
+            return f"{hours_word} {minutes_word}{suffix_word}"
+
+        t_text = re.sub(time_colon_pattern, time_colon_replacer, t_text, flags=re.IGNORECASE)
+        
+        # Pattern 2: Single-digit hour times with direct AM/PM suffix, e.g., 2 PM, 10 a.m.
+        time_standalone_pattern = r'\b(\d{1,2})\s*(a\.m\.(?!\w)|p\.m\.(?!\w)|am\b|pm\b)'
+        
+        def time_standalone_replacer(match):
+            hours = int(match.group(1))
+            suffix = match.group(2)
+            
+            if hours < 1 or hours > 24:
+                return match.group(0)
+            
+            hours_word = num2words(hours)
+            clean_suffix = suffix.lower().replace(".", "").strip()
+            suffix_word = " ay em" if clean_suffix == "am" else " pee em"
+            
+            return f"{hours_word}{suffix_word}"
+            
+        t_text = re.sub(time_standalone_pattern, time_standalone_replacer, t_text, flags=re.IGNORECASE)
+        return t_text
+
     text = raw_text
+    
+    # --- 1. RUN TIME NORMALIZATION ---
+    text = normalize_times(text)
+    # ---------------------------------
+    
     text = re.sub(r'\*\s*\d+\b', '', text) 
     text = re.sub(r'\[[^\]]*\]', '', text)  
     academic_terms = r'\b(?:spp?\.?|ssp\.?|subsp\.?|var\.?|f\.?|cf\.?|e\.g\.?|i\.e\.?|viz\.?|see|fig\.?|plate|chapter|probably)\b'
